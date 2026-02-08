@@ -2,82 +2,364 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Voice Bridge Test</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voice Translation Call</title>
     <style>
       body {
-        font-family: sans-serif;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: 50px;
-        background: #f4f4f9;
-      }
-      .card {
-        background: white;
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 50px auto;
         padding: 20px;
+        background: #f5f5f5;
+      }
+      .container {
+        background: white;
+        padding: 30px;
         border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
       }
       .status {
-        margin-top: 10px;
-        color: #666;
-        font-style: italic;
-      }
-      #visualizer {
-        width: 300px;
-        height: 50px;
-        background: #eee;
+        padding: 10px;
         margin: 10px 0;
         border-radius: 5px;
+        font-weight: bold;
       }
+      .status.connected {
+        background: #d4edda;
+        color: #155724;
+      }
+      .status.disconnected {
+        background: #f8d7da;
+        color: #721c24;
+      }
+      .status.waiting {
+        background: #fff3cd;
+        color: #856404;
+      }
+
+      .controls {
+        margin: 20px 0;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
       button {
-        padding: 10px 20px;
-        cursor: pointer;
+        padding: 12px 24px;
+        font-size: 16px;
         border: none;
         border-radius: 5px;
+        cursor: pointer;
+        transition: all 0.3s;
+      }
+
+      button.primary {
         background: #007bff;
         color: white;
       }
+
+      button.primary:hover {
+        background: #0056b3;
+      }
+
+      button.danger {
+        background: #dc3545;
+        color: white;
+      }
+
+      button.danger:hover {
+        background: #c82333;
+      }
+
       button:disabled {
         background: #ccc;
+        cursor: not-allowed;
       }
-      .speaking {
-        background: #dc3545 !important;
-        animation: pulse 1s infinite;
+
+      .caption-box {
+        margin: 20px 0;
+        padding: 15px;
+        background: #f8f9fa;
+        border-left: 4px solid #007bff;
+        min-height: 60px;
       }
+
+      .caption-label {
+        font-size: 12px;
+        color: #666;
+        margin-bottom: 5px;
+      }
+
+      .caption-text {
+        font-size: 16px;
+        color: #333;
+      }
+
+      select {
+        padding: 10px;
+        font-size: 16px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+      }
+
+      .recording-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #ccc;
+        margin-left: 10px;
+        animation: pulse 2s infinite;
+      }
+
+      .recording-indicator.active {
+        background: #dc3545;
+      }
+
+      .remote-user-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        font-size: 0.9em;
+        color: #555;
+      }
+      .pulse-dot {
+        width: 8px;
+        height: 8px;
+        background: #28a745;
+        border-radius: 50%;
+        display: none; /* Only show when remote user speaks */
+      }
+
       @keyframes pulse {
-        0% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.7;
-        }
+        0%,
         100% {
           opacity: 1;
         }
+        50% {
+          opacity: 0.5;
+        }
+      }
+
+      .info {
+        margin-top: 20px;
+        padding: 15px;
+        background: #e7f3ff;
+        border-radius: 5px;
+        font-size: 14px;
       }
     </style>
   </head>
   <body>
-    <div class="card">
-      <h2>Voice Translation Bridge</h2>
+    <div class="container">
+      <h1>🌐 Voice Translation Call</h1>
 
-      <label>My Native Language:</label>
-      <select id="myLang">
-        <option value="en">English</option>
-        <option value="fr">French</option>
-        <option value="de">German</option>
-        <option value="ko">Korean</option>
-      </select>
-      <br /><br />
+      <div class="controls">
+        <label>My Language:</label>
+        <select id="nativeLanguage">
+          <option value="en">English</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="es">Spanish</option>
+        </select>
 
-      <button id="connectBtn">Join Call</button>
-      <button id="talkBtn" disabled>Hold to Talk</button>
+        <label>Room ID:</label>
+        <input
+          type="text"
+          id="roomId"
+          value="room1"
+          style="
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+          "
+        />
 
-      <div id="visualizer"></div>
-      <p class="status" id="status">Status: Disconnected</p>
+        <button id="joinBtn" class="primary">Join Call</button>
+        <button id="leaveBtn" class="danger" disabled>Leave Call</button>
+
+        <span class="recording-indicator" id="recordingIndicator"></span>
+      </div>
+
+      <div id="status" class="status disconnected">Disconnected</div>
+
+      <div class="caption-box">
+        <div class="caption-label">Incoming Translation:</div>
+        <div class="caption-text" id="translatedCaption">
+          Waiting for translation...
+        </div>
+      </div>
+
+      <div class="caption-box">
+        <div class="caption-label">Original (What they said):</div>
+        <div class="caption-text" id="originalCaption">-</div>
+      </div>
+
+      <audio id="audioPlayer" style="width: 100%; margin: 20px 0"></audio>
+
+      <div class="info">
+        <strong>ℹ️ How it works:</strong><br />
+        • Click "Join Call" to connect<br />
+        • Your microphone is automatically active - just speak naturally<br />
+        • System detects when you stop speaking (1.5s silence)<br />
+        • Translation happens automatically and plays to the other person<br />
+        • No need to hold any buttons!
+      </div>
     </div>
 
-    <script src="app.js"></script>
+    <script>
+      let ws = null;
+      let mediaStream = null;
+      let mediaRecorder = null;
+      let userId = `user_${Math.random().toString(36).substr(2, 9)}`;
+      let isStreaming = false;
+
+      const joinBtn = document.getElementById("joinBtn");
+      const leaveBtn = document.getElementById("leaveBtn");
+      const status = document.getElementById("status");
+      const translatedCaption = document.getElementById("translatedCaption");
+      const originalCaption = document.getElementById("originalCaption");
+      const audioPlayer = document.getElementById("audioPlayer");
+      const nativeLanguage = document.getElementById("nativeLanguage");
+      const roomId = document.getElementById("roomId");
+      const recordingIndicator = document.getElementById("recordingIndicator");
+
+      // Join call
+      joinBtn.addEventListener("click", async () => {
+        try {
+          const room = roomId.value || "room1";
+          const lang = nativeLanguage.value;
+
+          // Connect WebSocket
+          ws = new WebSocket(`ws://localhost:8000/ws/call/${room}/${userId}`);
+
+          ws.onopen = async () => {
+            // Send initial config
+            ws.send(
+              JSON.stringify({
+                native_lang: lang,
+              }),
+            );
+
+            // Start microphone
+            await startMicrophone();
+
+            joinBtn.disabled = true;
+            leaveBtn.disabled = false;
+            status.textContent = "Connected - Microphone Active";
+            status.className = "status connected";
+          };
+
+          ws.onmessage = async (event) => {
+            if (event.data instanceof Blob) {
+              // Received translated audio
+              const audioBlob = event.data;
+              const audioUrl = URL.createObjectURL(audioBlob);
+              audioPlayer.src = audioUrl;
+              audioPlayer.play();
+            } else {
+              // JSON message
+              const msg = JSON.parse(event.data);
+
+              if (msg.type === "caption") {
+                translatedCaption.textContent = msg.text;
+                originalCaption.textContent = msg.original;
+              } else if (msg.type === "connected") {
+                console.log("Connected as:", msg.user_id);
+              } else if (msg.info) {
+                status.textContent = msg.info;
+                status.className = "status waiting";
+              }
+            }
+          };
+
+          ws.onerror = (error) => {
+            console.error("WebSocket error:", error);
+            status.textContent = "Connection Error";
+            status.className = "status disconnected";
+          };
+
+          ws.onclose = () => {
+            stopMicrophone();
+            joinBtn.disabled = false;
+            leaveBtn.disabled = true;
+            status.textContent = "Disconnected";
+            status.className = "status disconnected";
+            recordingIndicator.classList.remove("active");
+          };
+        } catch (error) {
+          console.error("Failed to join:", error);
+          alert("Failed to join call: " + error.message);
+        }
+      });
+
+      // Leave call
+      leaveBtn.addEventListener("click", () => {
+        if (ws) {
+          ws.close();
+        }
+        stopMicrophone();
+      });
+
+      // Replace your existing startMicrophone and stopMicrophone scripts with this:
+
+      let audioContext;
+      let processor;
+
+      async function startMicrophone() {
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true },
+          });
+
+          audioContext = new (window.AudioContext || window.webkitAudioContext)(
+            { sampleRate: 16000 },
+          );
+          const source = audioContext.createMediaStreamSource(mediaStream);
+
+          // 4096 buffer size = ~250ms of audio per chunk
+          processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+
+          processor.onaudioprocess = (e) => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              const inputData = e.inputBuffer.getChannelData(0);
+              const pcmData = new Int16Array(inputData.length);
+
+              // Convert float to 16-bit PCM
+              for (let i = 0; i < inputData.length; i++) {
+                let s = Math.max(-1, Math.min(1, inputData[i]));
+                pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+              }
+              ws.send(pcmData.buffer);
+              recordingIndicator.classList.add("active");
+            }
+          };
+
+          isStreaming = true;
+          console.log("🎤 Streaming raw PCM...");
+        } catch (error) {
+          console.error("Microphone error:", error);
+        }
+      }
+
+      function stopMicrophone() {
+        if (processor) processor.disconnect();
+        if (audioContext) audioContext.close();
+        if (mediaStream)
+          mediaStream.getTracks().forEach((track) => track.stop());
+        isStreaming = false;
+        recordingIndicator.classList.remove("active");
+      }
+      // Cleanup on page unload
+      window.addEventListener("beforeunload", () => {
+        if (ws) ws.close();
+        stopMicrophone();
+      });
+    </script>
   </body>
 </html>
