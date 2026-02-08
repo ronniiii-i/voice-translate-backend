@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Voice Bridge Test</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 50px;
+        background: #f4f4f9;
+      }
+      .card {
+        background: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      .status {
+        margin-top: 10px;
+        color: #666;
+        font-style: italic;
+      }
+      #visualizer {
+        width: 300px;
+        height: 50px;
+        background: #eee;
+        margin: 10px 0;
+        border-radius: 5px;
+      }
+      button {
+        padding: 10px 20px;
+        cursor: pointer;
+        border: none;
+        border-radius: 5px;
+        background: #007bff;
+        color: white;
+      }
+      button:disabled {
+        background: #ccc;
+      }
+      .speaking {
+        background: #dc3545 !important;
+        animation: pulse 1s infinite;
+      }
+      @keyframes pulse {
+        0% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.7;
+        }
+        100% {
+          opacity: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>Voice Translation Bridge</h2>
+
+      <label>My Native Language:</label>
+      <select id="myLang">
+        <option value="en">English</option>
+        <option value="fr">French</option>
+        <option value="de">German</option>
+        <option value="ko">Korean</option>
+      </select>
+      <br /><br />
+
+      <button id="connectBtn">Join Call</button>
+      <button id="talkBtn" disabled>Hold to Talk</button>
+
+      <div id="visualizer"></div>
+      <p class="status" id="status">Status: Disconnected</p>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

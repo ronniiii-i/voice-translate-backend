@@ -1,0 +1,30 @@
+# --- Python / Environment ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.pytest_cache/
+
+# --- AI Models ---
+/models/
+*.onnx
+*.bin
+*.pt
+*.pth
+
+# --- Temporary Files / Audio ---
+*.wav
+*.json
+/tmp/
+temp_audio/
+
+# --- Operating System ---
+.DS_Store
+Thumbs.db
+
+# --- WSL / Editor ---
+.vscode/
+.idea/
+.wslconfig
