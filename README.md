@@ -1,10 +1,9 @@
-# 🌍 Voice Translation Bridge (WSL-AI)
+# Voice Translation App
 
-A real-time, bi-directional voice translation system designed to act as a "language bridge" between two users in a voice call. Built for high-performance execution on consumer hardware (tested on i5-11th Gen, 8GB RAM).
+A real-time, bi-directional voice translation system designed to act as a "language bridge" between two users in a voice call.
 
-## ✨ Features
+## Features
 
-* **Push-to-Talk Interface:** Real-time audio capture via browser WebSockets.
 * **Automatic Role-Swapping:** Smart routing that translates User A's native language into User B's native language and vice-versa.
 * **Low Latency Core:** * **ASR:** Whisper.cpp (Tiny model) for lightning-fast speech-to-text.
 * **MT:** Argos Translate (Open-source, offline Neural Machine Translation).
@@ -74,14 +73,13 @@ This project requires specific binaries not included in the repository due to si
 
 ```bash
 cd backend
-# The lifespan event will pre-load models into RAM (~90s)
 python3 app/main.py
 
 ```
 
 Wait for the message: `✅ System Ready on Port 8000`.
 
-### 2. Launch the Frontend
+### 2. Launch the Frontend (For testing purposes)
 
 You can serve the frontend using a simple Python server:
 
