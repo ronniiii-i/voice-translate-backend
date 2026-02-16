@@ -11,6 +11,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from contextlib import asynccontextmanager
 from app.services.translation_pipeline import TranslationPipeline
 from app.services.vad_processor import StreamingVAD
+from fastapi.middleware.cors import CORSMiddleware
+
 
 call_registry = {}
 pipeline = None
@@ -30,6 +32,15 @@ async def lifespan(app: FastAPI):
     call_registry.clear()
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For testing, allow everything
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.websocket("/ws/call/{room_id}/{user_id}")
 async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
