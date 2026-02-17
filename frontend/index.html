@@ -233,7 +233,13 @@
           const lang = nativeLanguage.value;
 
           // Connect WebSocket
-          ws = new WebSocket(`ws://localhost:8000/ws/call/${room}/${userId}`);
+          ws = new WebSocket(
+            `wss://5df9-105-112-0-50.ngrok-free.app/ws/call/${room}/${userId}`,
+          );
+          // const socketHost = window.location.hostname;
+          // ws = new WebSocket(
+          //   `ws://${socketHost}:8000/ws/call/${room}/${userId}`,
+          // );
 
           ws.onopen = async () => {
             // Send initial config
