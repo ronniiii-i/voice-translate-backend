@@ -6,6 +6,9 @@ websockets==12.0
 pydantic==2.5.3
 python-dotenv==1.0.0
 
+# ASR
+faster-whisper>=1.0.0
+
 # Translation
 argostranslate>=1.9.0
 
