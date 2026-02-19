@@ -24,24 +24,17 @@
         border-radius: 5px;
         font-weight: bold;
       }
-      .status.connected {
-        background: #d4edda;
-        color: #155724;
-      }
-      .status.disconnected {
-        background: #f8d7da;
-        color: #721c24;
-      }
-      .status.waiting {
-        background: #fff3cd;
-        color: #856404;
-      }
+      .status.connected    { background: #d4edda; color: #155724; }
+      .status.disconnected { background: #f8d7da; color: #721c24; }
+      .status.waiting      { background: #fff3cd; color: #856404; }
+      .status.error        { background: #f8d7da; color: #721c24; }
 
       .controls {
         margin: 20px 0;
         display: flex;
         gap: 10px;
         align-items: center;
+        flex-wrap: wrap;
       }
 
       button {
@@ -52,29 +45,11 @@
         cursor: pointer;
         transition: all 0.3s;
       }
-
-      button.primary {
-        background: #007bff;
-        color: white;
-      }
-
-      button.primary:hover {
-        background: #0056b3;
-      }
-
-      button.danger {
-        background: #dc3545;
-        color: white;
-      }
-
-      button.danger:hover {
-        background: #c82333;
-      }
-
-      button:disabled {
-        background: #ccc;
-        cursor: not-allowed;
-      }
+      button.primary { background: #007bff; color: white; }
+      button.primary:hover { background: #0056b3; }
+      button.danger  { background: #dc3545; color: white; }
+      button.danger:hover { background: #c82333; }
+      button:disabled { background: #ccc; cursor: not-allowed; }
 
       .caption-box {
         margin: 20px 0;
@@ -83,19 +58,10 @@
         border-left: 4px solid #007bff;
         min-height: 60px;
       }
+      .caption-label { font-size: 12px; color: #666; margin-bottom: 5px; }
+      .caption-text  { font-size: 16px; color: #333; }
 
-      .caption-label {
-        font-size: 12px;
-        color: #666;
-        margin-bottom: 5px;
-      }
-
-      .caption-text {
-        font-size: 16px;
-        color: #333;
-      }
-
-      select {
+      select, input[type=text] {
         padding: 10px;
         font-size: 16px;
         border: 1px solid #ddd;
@@ -104,42 +70,29 @@
 
       .recording-indicator {
         display: inline-block;
-        width: 12px;
-        height: 12px;
+        width: 12px; height: 12px;
         border-radius: 50%;
         background: #ccc;
-        margin-left: 10px;
-        animation: pulse 2s infinite;
       }
+      .recording-indicator.active { background: #dc3545; animation: pulse 1s infinite; }
 
-      .recording-indicator.active {
-        background: #dc3545;
-      }
-
-      .remote-user-status {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-top: 10px;
+      .peer-status {
+        margin: 8px 0;
         font-size: 0.9em;
         color: #555;
       }
-      .pulse-dot {
-        width: 8px;
-        height: 8px;
-        background: #28a745;
+      .peer-status .dot {
+        display: inline-block;
+        width: 8px; height: 8px;
         border-radius: 50%;
-        display: none; /* Only show when remote user speaks */
+        margin-right: 6px;
       }
+      .dot.online  { background: #28a745; }
+      .dot.offline { background: #999; }
 
       @keyframes pulse {
-        0%,
-        100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.5;
-        }
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.4; }
       }
 
       .info {
@@ -148,12 +101,32 @@
         background: #e7f3ff;
         border-radius: 5px;
         font-size: 14px;
+        line-height: 1.6;
       }
+
+      /* ── Server URL config (shown at top for easy editing) ── */
+      .server-config {
+        margin-bottom: 16px;
+        padding: 10px;
+        background: #fffbea;
+        border: 1px solid #e0c96e;
+        border-radius: 5px;
+        font-size: 13px;
+      }
+      .server-config label { font-weight: bold; }
+      .server-config input { width: 360px; }
     </style>
   </head>
   <body>
     <div class="container">
-      <h1>🌐 Voice Translation Call</h1>
+      <h1>🌍 Voice Translation Call</h1>
+
+      <!-- ── Server URL — edit this to match your backend ── -->
+      <div class="server-config">
+        <label>Backend URL:</label>
+        <input type="text" id="serverUrl" value="ws://localhost:8000" />
+        <small style="color:#888"> (e.g. wss://xxxx.ngrok-free.app)</small>
+      </div>
 
       <div class="controls">
         <label>My Language:</label>
@@ -165,203 +138,238 @@
         </select>
 
         <label>Room ID:</label>
-        <input
-          type="text"
-          id="roomId"
-          value="room1"
-          style="
-            padding: 10px;
-            font-size: 16px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-          "
-        />
+        <input type="text" id="roomId" value="room1" style="width:100px" />
 
-        <button id="joinBtn" class="primary">Join Call</button>
+        <button id="joinBtn"  class="primary">Join Call</button>
         <button id="leaveBtn" class="danger" disabled>Leave Call</button>
 
-        <span class="recording-indicator" id="recordingIndicator"></span>
+        <span class="recording-indicator" id="recordingIndicator" title="Mic active"></span>
       </div>
 
       <div id="status" class="status disconnected">Disconnected</div>
 
+      <div class="peer-status" id="peerStatus">
+        <span class="dot offline" id="peerDot"></span>
+        <span id="peerLabel">Waiting for peer to join…</span>
+      </div>
+
       <div class="caption-box">
         <div class="caption-label">Incoming Translation:</div>
-        <div class="caption-text" id="translatedCaption">
-          Waiting for translation...
-        </div>
+        <div class="caption-text" id="translatedCaption">Waiting for translation…</div>
       </div>
 
       <div class="caption-box">
-        <div class="caption-label">Original (What they said):</div>
-        <div class="caption-text" id="originalCaption">-</div>
+        <div class="caption-label">Original (what they said):</div>
+        <div class="caption-text" id="originalCaption">—</div>
       </div>
 
-      <audio id="audioPlayer" style="width: 100%; margin: 20px 0"></audio>
+      <audio id="audioPlayer" style="width:100%; margin:20px 0"></audio>
 
       <div class="info">
-        <strong>ℹ️ How it works:</strong><br />
-        • Click "Join Call" to connect<br />
-        • Your microphone is automatically active - just speak naturally<br />
-        • System detects when you stop speaking (1.5s silence)<br />
-        • Translation happens automatically and plays to the other person<br />
-        • No need to hold any buttons!
+        <strong>ℹ️ How it works:</strong><br/>
+        • Both users open this page, choose their language, enter the same Room ID, and click "Join Call"<br/>
+        • Speak naturally — the system detects when you stop (≈1.2s silence) and translates automatically<br/>
+        • Translated audio plays to the other person; captions show what was said<br/>
+        • Room supports exactly 2 people; open a different Room ID for a second conversation
       </div>
     </div>
 
     <script>
-      let ws = null;
-      let mediaStream = null;
-      let mediaRecorder = null;
-      let userId = `user_${Math.random().toString(36).substr(2, 9)}`;
-      let isStreaming = false;
+      // ── State ─────────────────────────────────────────────────────────────
+      let ws           = null;
+      let mediaStream  = null;
+      let audioContext = null;
+      let processor    = null;
+      let isStreaming  = false;
+      let hasPeer      = false;
 
-      const joinBtn = document.getElementById("joinBtn");
-      const leaveBtn = document.getElementById("leaveBtn");
-      const status = document.getElementById("status");
-      const translatedCaption = document.getElementById("translatedCaption");
-      const originalCaption = document.getElementById("originalCaption");
-      const audioPlayer = document.getElementById("audioPlayer");
-      const nativeLanguage = document.getElementById("nativeLanguage");
-      const roomId = document.getElementById("roomId");
+      const userId = `user_${Math.random().toString(36).substr(2, 9)}`;
+
+      // ── DOM refs ──────────────────────────────────────────────────────────
+      const joinBtn            = document.getElementById("joinBtn");
+      const leaveBtn           = document.getElementById("leaveBtn");
+      const statusEl           = document.getElementById("status");
+      const translatedCaption  = document.getElementById("translatedCaption");
+      const originalCaption    = document.getElementById("originalCaption");
+      const audioPlayer        = document.getElementById("audioPlayer");
+      const nativeLanguage     = document.getElementById("nativeLanguage");
+      const roomIdEl           = document.getElementById("roomId");
       const recordingIndicator = document.getElementById("recordingIndicator");
+      const peerDot            = document.getElementById("peerDot");
+      const peerLabel          = document.getElementById("peerLabel");
+      const serverUrlEl        = document.getElementById("serverUrl");
 
-      // Join call
+      // ── Helpers ───────────────────────────────────────────────────────────
+      function setStatus(text, cls) {
+        statusEl.textContent  = text;
+        statusEl.className    = `status ${cls}`;
+      }
+
+      function setPeerOnline(peerId) {
+        hasPeer = true;
+        peerDot.className   = "dot online";
+        peerLabel.textContent = peerId
+          ? `🟢 Peer connected: ${peerId}`
+          : "🟢 Peer connected";
+      }
+
+      function setPeerOffline(peerId) {
+        hasPeer = false;
+        peerDot.className   = "dot offline";
+        peerLabel.textContent = "Waiting for peer to join…";
+      }
+
+      // ── Join ─────────────────────────────────────────────────────────────
       joinBtn.addEventListener("click", async () => {
-        try {
-          const room = roomId.value || "room1";
-          const lang = nativeLanguage.value;
+        const room = roomIdEl.value.trim() || "room1";
+        const lang = nativeLanguage.value;
+        const base = serverUrlEl.value.trim().replace(/\/$/, "");
 
-          // Connect WebSocket
-          ws = new WebSocket(
-            `wss://8e31-105-112-0-50.ngrok-free.app/ws/call/${room}/${userId}`,
-          );
-          // const socketHost = window.location.hostname;
-          // ws = new WebSocket(
-          //   `ws://${socketHost}:8000/ws/call/${room}/${userId}`,
-          // );
+        const url = `${base}/ws/call/${room}/${userId}`;
+        console.log("Connecting to:", url);
+
+        try {
+          ws = new WebSocket(url);
 
           ws.onopen = async () => {
-            // Send initial config
-            ws.send(
-              JSON.stringify({
-                native_lang: lang,
-              }),
-            );
-
-            // Start microphone
+            // Send handshake config
+            ws.send(JSON.stringify({ native_lang: lang }));
             await startMicrophone();
 
-            joinBtn.disabled = true;
+            joinBtn.disabled  = true;
             leaveBtn.disabled = false;
-            status.textContent = "Connected - Microphone Active";
-            status.className = "status connected";
+            setStatus(`Connected to room '${room}' as ${userId}`, "connected");
           };
 
           ws.onmessage = async (event) => {
             if (event.data instanceof Blob) {
-              // Received translated audio
-              const audioBlob = event.data;
-              const audioUrl = URL.createObjectURL(audioBlob);
-              audioPlayer.src = audioUrl;
-              audioPlayer.play();
+              // Translated audio from peer
+              const url = URL.createObjectURL(event.data);
+              audioPlayer.src = url;
+              audioPlayer.play().catch(e => console.warn("Audio play blocked:", e));
             } else {
-              // JSON message
               const msg = JSON.parse(event.data);
+              console.log("[WS msg]", msg);
 
-              if (msg.type === "caption") {
-                translatedCaption.textContent = msg.text;
-                originalCaption.textContent = msg.original;
-              } else if (msg.type === "connected") {
-                console.log("Connected as:", msg.user_id);
-              } else if (msg.info) {
-                status.textContent = msg.info;
-                status.className = "status waiting";
+              switch (msg.type) {
+                case "connected":
+                  console.log("Server confirmed connection:", msg.user_id);
+                  break;
+                case "peer_joined":
+                  setPeerOnline(msg.peer_id);
+                  setStatus(`Connected — peer ${msg.peer_id} joined`, "connected");
+                  break;
+                case "peer_left":
+                  setPeerOffline(msg.peer_id);
+                  setStatus(`Peer left. Waiting for someone to join room '${room}'…`, "waiting");
+                  break;
+                case "caption":
+                  translatedCaption.textContent = msg.text    || "—";
+                  originalCaption.textContent   = msg.original || "—";
+                  break;
+                case "pong":
+                  break; // keepalive response
+                case "error":
+                  console.error("Server error:", msg.message);
+                  setStatus(`Error: ${msg.message}`, "error");
+                  break;
+                default:
+                  // Legacy / unknown
+                  if (msg.info) setStatus(msg.info, "waiting");
               }
             }
           };
 
-          ws.onerror = (error) => {
-            console.error("WebSocket error:", error);
-            status.textContent = "Connection Error";
-            status.className = "status disconnected";
+          ws.onerror = (err) => {
+            console.error("WebSocket error:", err);
+            setStatus("Connection error — check Backend URL and server logs", "error");
           };
 
-          ws.onclose = () => {
+          ws.onclose = (event) => {
             stopMicrophone();
-            joinBtn.disabled = false;
+            joinBtn.disabled  = false;
             leaveBtn.disabled = true;
-            status.textContent = "Disconnected";
-            status.className = "status disconnected";
+            setStatus(`Disconnected (code ${event.code})`, "disconnected");
             recordingIndicator.classList.remove("active");
+            setPeerOffline();
           };
-        } catch (error) {
-          console.error("Failed to join:", error);
-          alert("Failed to join call: " + error.message);
+
+        } catch (err) {
+          console.error("Failed to connect:", err);
+          alert("Failed to connect: " + err.message);
         }
       });
 
-      // Leave call
+      // ── Leave ─────────────────────────────────────────────────────────────
       leaveBtn.addEventListener("click", () => {
-        if (ws) {
-          ws.close();
-        }
+        if (ws) ws.close();
         stopMicrophone();
       });
 
-      // Replace your existing startMicrophone and stopMicrophone scripts with this:
-
-      let audioContext;
-      let processor;
-
+      // ── Microphone ────────────────────────────────────────────────────────
       async function startMicrophone() {
         try {
           mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              sampleRate: 16000,
+            },
           });
 
-          audioContext = new (window.AudioContext || window.webkitAudioContext)(
-            { sampleRate: 16000 },
-          );
+          // Force 16kHz to match Whisper's expected sample rate
+          audioContext = new (window.AudioContext || window.webkitAudioContext)({
+            sampleRate: 16000,
+          });
+
           const source = audioContext.createMediaStreamSource(mediaStream);
 
-          // 4096 buffer size = ~250ms of audio per chunk
+          // 4096 samples @ 16kHz ≈ 256ms per chunk — good VAD granularity
           processor = audioContext.createScriptProcessor(4096, 1, 1);
-
           source.connect(processor);
           processor.connect(audioContext.destination);
 
           processor.onaudioprocess = (e) => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              const inputData = e.inputBuffer.getChannelData(0);
-              const pcmData = new Int16Array(inputData.length);
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-              // Convert float to 16-bit PCM
-              for (let i = 0; i < inputData.length; i++) {
-                let s = Math.max(-1, Math.min(1, inputData[i]));
-                pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-              }
-              ws.send(pcmData.buffer);
-              recordingIndicator.classList.add("active");
+            const floatData = e.inputBuffer.getChannelData(0);
+            const pcm16     = new Int16Array(floatData.length);
+
+            // Float32 [-1, 1] → Int16 [-32768, 32767]
+            for (let i = 0; i < floatData.length; i++) {
+              const s  = Math.max(-1, Math.min(1, floatData[i]));
+              pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
             }
+
+            ws.send(pcm16.buffer);
+            recordingIndicator.classList.add("active");
           };
 
           isStreaming = true;
-          console.log("🎤 Streaming raw PCM...");
-        } catch (error) {
-          console.error("Microphone error:", error);
+          console.log("🎤 Streaming PCM16 @ 16kHz");
+
+        } catch (err) {
+          console.error("Microphone error:", err);
+          alert("Could not access microphone: " + err.message);
         }
       }
 
       function stopMicrophone() {
-        if (processor) processor.disconnect();
-        if (audioContext) audioContext.close();
-        if (mediaStream)
-          mediaStream.getTracks().forEach((track) => track.stop());
+        if (processor)    { processor.disconnect();  processor    = null; }
+        if (audioContext) { audioContext.close();     audioContext = null; }
+        if (mediaStream)  { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
         isStreaming = false;
         recordingIndicator.classList.remove("active");
       }
-      // Cleanup on page unload
+
+      // ── Keepalive ping every 25s to prevent proxy timeouts ───────────────
+      setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping" }));
+        }
+      }, 25000);
+
+      // ── Cleanup on page unload ────────────────────────────────────────────
       window.addEventListener("beforeunload", () => {
         if (ws) ws.close();
         stopMicrophone();
