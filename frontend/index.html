@@ -243,42 +243,85 @@
 
           ws.onmessage = async (event) => {
             if (event.data instanceof Blob) {
-              // Translated audio from peer
-              const url = URL.createObjectURL(event.data);
-              audioPlayer.src = url;
-              audioPlayer.play().catch(e => console.warn("Audio play blocked:", e));
+              const buf = await event.data.arrayBuffer();
+              await handleIncoming(buf);
+            } else if (event.data instanceof ArrayBuffer) {
+              await handleIncoming(event.data);
             } else {
               const msg = JSON.parse(event.data);
               console.log("[WS msg]", msg);
-
-              switch (msg.type) {
-                case "connected":
-                  console.log("Server confirmed connection:", msg.user_id);
-                  break;
-                case "peer_joined":
-                  setPeerOnline(msg.peer_id);
-                  setStatus(`Connected — peer ${msg.peer_id} joined`, "connected");
-                  break;
-                case "peer_left":
-                  setPeerOffline(msg.peer_id);
-                  setStatus(`Peer left. Waiting for someone to join room '${room}'…`, "waiting");
-                  break;
-                case "caption":
-                  translatedCaption.textContent = msg.text    || "—";
-                  originalCaption.textContent   = msg.original || "—";
-                  break;
-                case "pong":
-                  break; // keepalive response
-                case "error":
-                  console.error("Server error:", msg.message);
-                  setStatus(`Error: ${msg.message}`, "error");
-                  break;
-                default:
-                  // Legacy / unknown
-                  if (msg.info) setStatus(msg.info, "waiting");
-              }
+              handleJsonMsg(msg);
             }
           };
+
+          // Handle framed binary: 4-byte JSON length + JSON metadata + WAV bytes
+          // Caption is updated ONLY when this audio chunk starts playing,
+          // so captions stay in sync with what you're actually hearing.
+          async function handleIncoming(buf) {
+            const view = new DataView(buf);
+            const jsonLen = view.getUint32(0, false); // big-endian
+
+            // Check if this is a framed audio_with_caption message
+            if (jsonLen > 0 && jsonLen < buf.byteLength - 4) {
+              try {
+                const jsonBytes = buf.slice(4, 4 + jsonLen);
+                const meta = JSON.parse(new TextDecoder().decode(jsonBytes));
+
+                if (meta.type === "audio_with_caption") {
+                  const wavBytes = buf.slice(4 + jsonLen);
+                  const blob = new Blob([wavBytes], { type: "audio/wav" });
+                  const url  = URL.createObjectURL(blob);
+
+                  // Update caption NOW (just before playing), not when pipeline finished
+                  translatedCaption.textContent = meta.text     || "—";
+                  originalCaption.textContent   = meta.original || "—";
+
+                  audioPlayer.src = url;
+                  audioPlayer.play().catch(e => console.warn("Audio play blocked:", e));
+                  audioPlayer.onended = () => URL.revokeObjectURL(url);
+                  return;
+                }
+              } catch(e) {
+                // Fall through to raw audio handling
+              }
+            }
+
+            // Fallback: plain WAV bytes (no caption embedded)
+            const blob = new Blob([buf], { type: "audio/wav" });
+            const url  = URL.createObjectURL(blob);
+            audioPlayer.src = url;
+            audioPlayer.play().catch(e => console.warn("Audio play blocked:", e));
+            audioPlayer.onended = () => URL.revokeObjectURL(url);
+          }
+
+          function handleJsonMsg(msg) {
+            switch (msg.type) {
+              case "connected":
+                console.log("Server confirmed connection:", msg.user_id);
+                break;
+              case "peer_joined":
+                setPeerOnline(msg.peer_id);
+                setStatus(`Connected — peer ${msg.peer_id} joined`, "connected");
+                break;
+              case "peer_left":
+                setPeerOffline(msg.peer_id);
+                setStatus(`Peer left. Waiting for someone to join room '${room}'…`, "waiting");
+                break;
+              case "caption":
+                // Legacy fallback (TTS failed, text-only caption)
+                translatedCaption.textContent = msg.text     || "—";
+                originalCaption.textContent   = msg.original || "—";
+                break;
+              case "pong":
+                break;
+              case "error":
+                console.error("Server error:", msg.message);
+                setStatus(`Error: ${msg.message}`, "error");
+                break;
+              default:
+                if (msg.info) setStatus(msg.info, "waiting");
+            }
+          }
 
           ws.onerror = (err) => {
             console.error("WebSocket error:", err);
