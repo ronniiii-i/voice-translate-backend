@@ -53,6 +53,8 @@ async def lifespan(app: FastAPI):
 
     rooms.clear()
     executor.shutdown(wait=False)
+    if pipeline:
+        pipeline.tts.shutdown()  # cleanly close persistent Piper processes
 
 
 app = FastAPI(lifespan=lifespan)
@@ -83,9 +85,9 @@ class UserSession:
         self.lang = lang
         self.vad = StreamingVAD(
             silence_threshold=1.2,
-            min_speech_duration=0.4,
-            energy_threshold=400.0,   # lower = more sensitive; tune via logs
-            max_speech_duration=8.0,
+            min_speech_duration=0.8,
+            energy_threshold=800.0,
+            max_speech_duration=15.0,
         )
         self._busy = False
         self._lock = threading.Lock()
@@ -120,7 +122,7 @@ class UserSession:
                     audio,
                     target.lang,
                 ),
-                timeout=35.0,  # ASR(~5s) + MT(<1s) + TTS(~2s) + headroom
+                timeout=100.0,  # ASR(~5s) + MT(<1s) + TTS(~2s) + headroom
             )
 
             if result is None:
@@ -139,23 +141,37 @@ class UserSession:
                     os.unlink(out_path)
                 return
 
-            # Send translated audio first (lower latency perception)
+            # Send caption + audio as one atomic message.
+            # Protocol: JSON header (length-prefixed) + raw WAV bytes.
+            # The frontend updates the caption ONLY when it starts playing
+            # this audio chunk — not when the previous one was still playing.
+            #
+            # Message format: 4-byte big-endian JSON length + JSON + WAV bytes
             if out_path and os.path.exists(out_path):
                 with open(out_path, "rb") as f:
                     audio_bytes = f.read()
                 os.unlink(out_path)
-                await target.ws.send_bytes(audio_bytes)
 
-            # Then send captions
-            await target.ws.send_json({
-                "type": "caption",
-                "text": trans_text,
-                "original": src_text,
-            })
+                import struct as _struct
+                meta = json.dumps({
+                    "type": "audio_with_caption",
+                    "text": trans_text,
+                    "original": src_text,
+                }).encode("utf-8")
+                # 4-byte header = length of JSON, then JSON, then WAV bytes
+                framed = _struct.pack(">I", len(meta)) + meta + audio_bytes
+                await target.ws.send_bytes(framed)
+            else:
+                # TTS failed but we still have the translation — send caption only
+                await target.ws.send_json({
+                    "type": "caption",
+                    "text": trans_text,
+                    "original": src_text,
+                })
             print(f'✅ {self.user_id}→{target.user_id}: "{src_text[:60]}" → "{trans_text[:60]}"')
 
         except asyncio.TimeoutError:
-            print(f"❌ [{self.user_id}] Pipeline timeout (>35s)")
+            print(f"❌ [{self.user_id}] Pipeline timeout (>100s)")
 
         except Exception as e:
             err = str(e)
