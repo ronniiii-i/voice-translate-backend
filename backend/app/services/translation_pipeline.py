@@ -6,42 +6,58 @@ import tempfile
 import os
 import time
 
+
 class TranslationPipeline:
     def __init__(self):
-        self.asr = WhisperASR(model_size="tiny")  # tiny = 2-4s on your CPU
+        # tiny = 2-4s on i5 CPU with faster-whisper int8
+        self.asr = WhisperASR(model_size="tiny")
         self.translator = ArgosTranslator(warmup_pairs=[
             ("en", "fr"), ("fr", "en"),
             ("en", "es"), ("es", "en"),
             ("en", "de"), ("de", "en"),
         ])
         self.tts = PiperTTS()
-        print("✅ Pipeline ready (tiny model)")
+        print("✅ Translation Pipeline ready")
 
     def process_audio(self, audio_path: str, source_lang: str, target_lang: str) -> tuple:
-        """Audio → Text → Translation → Audio"""
+        """
+        Full pipeline: WAV file → transcription → translation → TTS audio file.
 
-        # Step 1: ASR
+        Returns:
+            (output_wav_path, source_text, translated_text)
+            output_wav_path may be None if ASR finds no speech.
+        """
+        t_total = time.time()
+
+        # ── Step 1: ASR ──────────────────────────────────────────────────────
         t0 = time.time()
         source_text = self.asr.transcribe(audio_path, language=source_lang)
-        print(f"[ASR] {time.time()-t0:.1f}s → '{source_text[:60]}'")
+        print(f"[ASR] {time.time()-t0:.1f}s → '{source_text[:80]}'")
 
-        # Skip silence / errors
+        # Bracketed sentinels mean no usable speech — skip MT+TTS
         if not source_text or source_text.startswith("["):
-            print(f"[Pipeline] Skipping — no usable speech")
+            print("[Pipeline] No usable speech, skipping MT+TTS")
             return None, source_text, "[no translation]"
 
-        # Step 2: MT
+        # ── Step 2: MT ───────────────────────────────────────────────────────
         t1 = time.time()
-        translated_text = self.translator.translate(source_text, source_lang, target_lang)
-        print(f"[MT] {time.time()-t1:.1f}s  '{source_lang}→{target_lang}': '{translated_text[:60]}'")
+        try:
+            translated_text = self.translator.translate(source_text, source_lang, target_lang)
+        except Exception as e:
+            print(f"[MT] Error: {e}")
+            return None, source_text, "[translation error]"
+        print(f"[MT] {time.time()-t1:.1f}s  '{source_lang}→{target_lang}': '{translated_text[:80]}'")
 
-        # Step 3: TTS
+        # ── Step 3: TTS ──────────────────────────────────────────────────────
         t2 = time.time()
-        out_audio = tempfile.mktemp(suffix=".wav")
-        self.tts.synthesize(translated_text, out_audio, language=target_lang)
+        try:
+            fd, out_audio = tempfile.mkstemp(suffix=".wav")
+            os.close(fd)
+            self.tts.synthesize(translated_text, out_audio, language=target_lang)
+        except Exception as e:
+            print(f"[TTS] Error: {e}")
+            return None, source_text, translated_text  # still return text even if audio fails
         print(f"[TTS] {time.time()-t2:.1f}s → {out_audio}")
 
-        total = time.time() - t0
-        print(f"[Pipeline] Total: {total:.1f}s")
-
+        print(f"[Pipeline] Total: {time.time()-t_total:.1f}s")
         return out_audio, source_text, translated_text
