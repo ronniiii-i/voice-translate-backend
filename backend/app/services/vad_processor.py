@@ -21,7 +21,7 @@ class StreamingVAD:
         silence_threshold: float = 1.2,       # seconds of silence before triggering
         min_speech_duration: float = 0.4,     # ignore very short blips
         energy_threshold: float = 400.0,      # RMS threshold — lower = more sensitive
-        max_speech_duration: float = 8.0,     # force-process after this many seconds
+        max_speech_duration: float = 15.0,     # force-process after this many seconds
         sample_rate: int = 16000,
         sample_width: int = 2,                # bytes per sample (Int16 = 2)
     ):
