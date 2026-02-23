@@ -27,8 +27,7 @@ import threading
 rooms: dict[str, dict] = {}
 pipeline: TranslationPipeline = None
 
-# 2 workers = matches your i5's physical cores exposed to Whisper
-executor = ThreadPoolExecutor(max_workers=2)
+executor = ThreadPoolExecutor(max_workers=4)
 
 MAX_USERS_PER_ROOM = 2
 
@@ -122,7 +121,7 @@ class UserSession:
                     audio,
                     target.lang,
                 ),
-                timeout=100.0,  # ASR(~5s) + MT(<1s) + TTS(~2s) + headroom
+                timeout=300.0,  # ASR(~5s) + MT(<1s) + TTS(~2s) + headroom
             )
 
             if result is None:
@@ -258,6 +257,7 @@ async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
         if peer:
             try:
                 await peer.ws.send_json({"type": "peer_joined", "peer_id": user_id})
+                session.vad._reset()
             except Exception:
                 pass
 
