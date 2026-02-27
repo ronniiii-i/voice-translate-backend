@@ -59,7 +59,7 @@ def is_hallucination(text: str) -> bool:
 
 
 class WhisperASR:
-    def __init__(self, model_size: str = "tiny"):
+    def __init__(self, model_size: str = "medium"):
         try:
             from faster_whisper import WhisperModel
         except ImportError:
@@ -68,7 +68,7 @@ class WhisperASR:
             )
 
         print(f"⏳ Loading faster-whisper [{model_size}] on CPU (int8)...")
-        self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        self.model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=4, num_workers=2,)
         self.model_size = model_size
         print(f"✅ WhisperASR ready (faster-whisper/{model_size}/cpu/int8)")
 
