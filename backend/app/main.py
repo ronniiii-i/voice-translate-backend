@@ -1,4 +1,3 @@
-# backend/app/main.py
 """
 Voice Call Translation Server
 
@@ -64,6 +63,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/rooms/{room_id}")
+async def check_room(room_id: str):
+    exists = room_id in rooms
+    count  = len(rooms[room_id]) if exists else 0
+    return {
+        "exists":    exists,
+        "room_id":   room_id,
+        "occupants": count,   # 0, 1, or 2
+    }
 
 
 @app.get("/health")
@@ -317,7 +326,6 @@ def _get_peer(room_id: str, exclude_user_id: str):
         if uid != exclude_user_id and session.connected:
             return session
     return None
-
 
 if __name__ == "__main__":
     uvicorn.run(
