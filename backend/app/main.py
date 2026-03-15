@@ -81,6 +81,15 @@ async def health():
     room_info = {rid: list(users.keys()) for rid, users in rooms.items()}
     return {"status": "ok", "rooms": room_info}
 
+@app.get("/")
+async def root():
+    return {
+        "name": "LinguaCall Backend",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+        "websocket": "wss://<host>/ws/call/{room_id}/{user_id}"
+    }
 
 class UserSession:
     """
