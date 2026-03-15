@@ -12,8 +12,9 @@ class TranslationPipeline:
         self.asr = WhisperASR(model_size="medium")
         self.translator = ArgosTranslator(warmup_pairs=[
             ("en", "fr"), ("fr", "en"),
-            # ("en", "es"), ("es", "en"),
-            # ("en", "de"), ("de", "en"),
+            ("en", "es"), ("es", "en"),
+            ("en", "de"), ("de", "en"),
+            ("en", "zh"), ("zh", "en"),
         ])
         self.tts = PiperTTS()
         print("✅ Translation Pipeline ready")
