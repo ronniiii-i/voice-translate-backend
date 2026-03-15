@@ -19,7 +19,6 @@ pathvalidate>=3.0.0
 # Audio Processing
 numpy>=1.24.0
 scipy>=1.10.0
-wave>=0.0.2
 webrtcvad
 
 # System/Subprocess utilities
