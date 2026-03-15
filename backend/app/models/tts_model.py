@@ -1,3 +1,4 @@
+import os
 import subprocess
 import wave
 import threading
@@ -8,8 +9,7 @@ from pathlib import Path
 
 class PiperTTS:
     def __init__(self):
-        self.root_dir = Path(__file__).parent.parent.parent.parent
-        self.model_dir = self.root_dir / "models/tts"
+        self.model_dir = Path(os.environ.get("MODEL_DIR", "/app/models")) / "tts"
 
         self.model_map = {
             "en": self._pick("en_US-ryan-low.onnx",     "en_US-bryce-medium.onnx"),
