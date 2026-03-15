@@ -92,7 +92,7 @@ class PiperTTS:
                 chunk = proc.stdout.read1(16384)
                 if chunk:
                     chunks.append(chunk)
-                    idle_wait = 0.15
+                    idle_wait = 0.30
                 else:
                     break   # pipe closed
             else:
