@@ -51,34 +51,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 #
 # Pairs like zh↔fr, zh↔de, zh↔es don't exist as direct packages —
 # Argos will automatically pivot through English at runtime. No action needed.
-RUN python3 << 'EOF'
-import argostranslate.package
 
-PAIRS = [
-("en", "fr"), ("fr", "en"),
-("en", "de"), ("de", "en"),
-("en", "es"), ("es", "en"),
-("en", "zh"), ("zh", "en"),
-("fr", "de"), ("de", "fr"),
-("fr", "es"), ("es", "fr"),
-("de", "es"), ("es", "de"),
-]
-
-print("Updating Argos package index...")
-argostranslate.package.update_package_index()
-available = argostranslate.package.get_available_packages()
-available_map = {(p.from_code, p.to_code): p for p in available}
-
-for src, tgt in PAIRS:
-pkg = available_map.get((src, tgt))
-if pkg:
-print(f"Installing {src} -> {tgt}...")
-argostranslate.package.install_from_path(pkg.download())
-else:
-print(f"Skipping {src} -> {tgt} (no direct package, will pivot via English)")
-
-print("Done.")
-'EOF'
+COPY install_argos.py .
+RUN python3 install_argos.py
 
 # ── 6. Download Piper voice models (low quality) ──────────────────────────────
 # Low quality = smaller files, faster synthesis, fits free tier RAM budget
