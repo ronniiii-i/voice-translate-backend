@@ -9,8 +9,7 @@ import time
 
 class TranslationPipeline:
     def __init__(self):
-        # tiny = 2-4s on i5 CPU with faster-whisper int8
-        self.asr = WhisperASR(model_size="base")
+        self.asr = WhisperASR(model_size="medium")
         self.translator = ArgosTranslator(warmup_pairs=[
             ("en", "fr"), ("fr", "en"),
             # ("en", "es"), ("es", "en"),
