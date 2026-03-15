@@ -83,11 +83,11 @@ RUN wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/m
   && wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/mls_10246/low/es_ES-mls_10246-low.onnx.json" \
   -O /app/models/tts/es_ES-mls_10246-low.onnx.json
 
-# Chinese — huayan low
-RUN wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/low/zh_CN-huayan-low.onnx" \
-  -O /app/models/tts/zh_CN-huayan-low.onnx \
-  && wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/low/zh_CN-huayan-low.onnx.json" \
-  -O /app/models/tts/zh_CN-huayan-low.onnx.json
+# Chinese — huayan x_low
+RUN wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/x_low/zh_CN-huayan-x_low.onnx" \
+  -O /app/models/tts/zh_CN-huayan-x_low.onnx \
+  && wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/x_low/zh_CN-huayan-x_low.onnx.json" \
+  -O /app/models/tts/zh_CN-huayan-x_low.onnx.json
 
 # ── 7. Copy application code ──────────────────────────────────────────────────
 COPY backend/app ./app
