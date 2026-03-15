@@ -141,7 +141,7 @@ class UserSession:
                     audio,
                     target.lang,
                 ),
-                timeout=300.0,  # ASR(~5s) + MT(<1s) + TTS(~2s) + headroom
+                timeout=30.0,
             )
 
             if result is None:
@@ -153,6 +153,15 @@ class UserSession:
             if not src_text or src_text.startswith("["):
                 print(f"[{self.user_id}] No usable speech: {src_text}")
                 return
+            
+            if session.connected:
+                try:
+                    await session.ws.send_json({
+                        "type": "self_caption",
+                        "text": src_text,
+                    })
+                except Exception:
+                    pass
 
             if not target.connected:
                 print(f"[{self.user_id}] Target disconnected — discarding result")
@@ -190,7 +199,7 @@ class UserSession:
             print(f'✅ {self.user_id}→{target.user_id}: "{src_text[:60]}" → "{trans_text[:60]}"')
 
         except asyncio.TimeoutError:
-            print(f"❌ [{self.user_id}] Pipeline timeout (>100s)")
+            print(f"❌ [{self.user_id}] Pipeline timeout (>30s)")
 
         except Exception as e:
             err = str(e)
