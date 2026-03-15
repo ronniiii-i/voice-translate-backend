@@ -77,14 +77,14 @@ class PiperTTS:
         print(f"[TTS] ✅ Piper [{language}] ready (pid={proc.pid})")
         return proc
 
-    def _read_utterance(self, proc: subprocess.Popen, timeout: float = 10.0) -> bytes:
+    def _read_utterance(self, proc: subprocess.Popen, timeout: float = 30.0) -> bytes:
         """
         Read one complete utterance from Piper stdout.
         We collect PCM chunks until data stops flowing for ~100ms.
         """
         chunks = []
         deadline   = time.time() + timeout
-        idle_wait  = 0.20   # initial: wait up to 200ms for first byte
+        idle_wait  = 0.20
 
         while time.time() < deadline:
             ready, _, _ = select.select([proc.stdout], [], [], idle_wait)
@@ -92,12 +92,12 @@ class PiperTTS:
                 chunk = proc.stdout.read1(16384)
                 if chunk:
                     chunks.append(chunk)
-                    idle_wait = 0.08    # tighten window once audio starts flowing
+                    idle_wait = 0.15
                 else:
                     break   # pipe closed
             else:
                 if chunks:
-                    break   # no new data for idle_wait seconds → utterance done
+                    break
                 if proc.poll() is not None:
                     raise RuntimeError("Piper process died before producing audio")
 
@@ -112,15 +112,15 @@ class PiperTTS:
                 pass
 
     def synthesize(self, text: str, output_path: str, language: str = "en") -> str:
-        if len(text) > 200:
-            trunc = text[:200]
-            for punct in ('.', '!', '?', ','):
-                idx = trunc.rfind(punct)
-                if idx > 80:
-                    trunc = trunc[:idx + 1]
-                    break
-            print(f"[TTS] ✂️  Truncated {len(text)} → {len(trunc)} chars")
-            text = trunc
+        # if len(text) > 200:
+        #     trunc = text[:200]
+        #     for punct in ('.', '!', '?', ','):
+        #         idx = trunc.rfind(punct)
+        #         if idx > 80:
+        #             trunc = trunc[:idx + 1]
+        #             break
+        #     print(f"[TTS] ✂️  Truncated {len(text)} → {len(trunc)} chars")
+        #     text = trunc
 
         text = text.replace("\n", " ").replace("\r", " ").strip()
         if not text:
