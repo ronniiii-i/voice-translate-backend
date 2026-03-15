@@ -8,6 +8,7 @@ Key design decisions:
 - 2 ThreadPoolExecutor workers (matches your CPU thread count)
 """
 
+from logging import config
 import os
 import json
 import uvicorn
@@ -91,6 +92,7 @@ class UserSession:
         self.user_id = user_id
         self.ws = ws
         self.lang = lang
+        self.display_name = user_id
         self.vad = StreamingVAD(
             silence_threshold=1.2,
             min_speech_duration=0.8,
@@ -261,11 +263,25 @@ async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
         print(f"📡 {user_id} joined room '{room_id}' [{lang}] ({len(room)}/{MAX_USERS_PER_ROOM})")
         await websocket.send_json({"type": "connected", "user_id": user_id, "room": room_id})
 
+        # Store display_name on the session
+        display_name = config.get("display_name", user_id)
+        session.display_name = display_name
+        
         # Notify peer if they're already in the room
         peer = _get_peer(room_id, user_id)
         if peer:
             try:
-                await peer.ws.send_json({"type": "peer_joined", "peer_id": user_id})
+                await peer.ws.send_json({"type": "peer_joined", "peer_id": user_id, "display_name": display_name})
+                session.vad._reset()
+            except Exception:
+                pass
+            # Also tell the joining user that a peer is already here
+            try:
+                await websocket.send_json({
+                    "type": "peer_joined",
+                    "peer_id": peer.user_id,
+                    "display_name": getattr(peer, "display_name", peer.user_id),
+                })
                 session.vad._reset()
             except Exception:
                 pass
@@ -312,7 +328,7 @@ async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
         peer = _get_peer(room_id, user_id)
         if peer:
             try:
-                await peer.ws.send_json({"type": "peer_left", "peer_id": user_id})
+                await peer.ws.send_json({"type": "peer_left", "peer_id": user_id, "display_name": getattr(session, "display_name", user_id)})
             except Exception:
                 pass
 
