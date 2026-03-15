@@ -16,6 +16,7 @@ class PiperTTS:
             "fr": self._pick("fr_FR-siwis-low.onnx",    "fr_FR-siwis-medium.onnx"),
             "de": self._pick("de_DE-thorsten-low.onnx",  "de_DE-thorsten-medium.onnx"),
             "es": self._pick("es_ES-mls_10246-low.onnx", "es_ES-mls_10246-low.onnx"),
+            "zh": self._pick("zh_CN-huayan-x_low.onnx"),
         }
 
         self._procs: dict[str, subprocess.Popen] = {}
