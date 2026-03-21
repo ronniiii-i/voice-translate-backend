@@ -59,7 +59,7 @@ def is_hallucination(text: str) -> bool:
 
 
 class WhisperASR:
-    def __init__(self, model_size: str = "medium"):
+    def __init__(self, model_size: str = "base"):
         try:
             from faster_whisper import WhisperModel
         except ImportError:
