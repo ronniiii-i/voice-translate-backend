@@ -5,22 +5,19 @@ HALLUCINATION_PATTERNS = [
     r"^\[.*\]$",
     r"^\(.*\)$",
     r"^\*.*\*$",
-    # r"^-\s*(yeah|yes|no|ok)\.$",
     r"^(music|musique|bruit|silence|applause|noise)$",
-    # r"^(merci|thank you|thanks|thank you\.|thanks\.)$",
-    # r"^(you|we)['']re\s+not\s+sure.*$",
     r"^sous-titres.*$",
     r"^(sous-titres réalisés|transcribed by|subtitles by).*$",
 ]
 
-REPEAT_WORD_MIN = 3  # catch loops after 3 repetitions, not 4
+REPEAT_WORD_MIN = 5
 
 
 def _detect_repetition_loop(text: str) -> bool:
     clean = re.sub(r"[^\w\s']", " ", text.lower())
     words = clean.split()
 
-    if len(words) < 4:
+    if len(words) < 6:
         return False
 
     for window in range(1, 7):
@@ -39,7 +36,7 @@ def _detect_repetition_loop(text: str) -> bool:
                 break
 
     half = len(words) // 2
-    if half >= 3:
+    if half >= 6:
         first = " ".join(words[:half])
         second = " ".join(words[half: half * 2])
         if first.lower() == second.lower():
@@ -59,7 +56,7 @@ def is_hallucination(text: str) -> bool:
 
 
 class WhisperASR:
-    def __init__(self, model_size: str = "base"):
+    def __init__(self, model_size: str = "medium"):
         try:
             from faster_whisper import WhisperModel
         except ImportError:
@@ -68,7 +65,13 @@ class WhisperASR:
             )
 
         print(f"⏳ Loading faster-whisper [{model_size}] on CPU (int8)...")
-        self.model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=4, num_workers=2,)
+        self.model = WhisperModel(
+            model_size,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=4,
+            num_workers=2,
+        )
         self.model_size = model_size
         print(f"✅ WhisperASR ready (faster-whisper/{model_size}/cpu/int8)")
 
@@ -95,7 +98,6 @@ class WhisperASR:
                     "min_silence_duration_ms": 200,
                     "speech_pad_ms": 100,
                 },
-
                 beam_size=1,
             )
 
