@@ -27,6 +27,7 @@ PIVOT_PAIRS: frozenset[tuple[str, str]] = frozenset({
 
 CONTEXT_WINDOW = 3
 
+
 class HelsinkiTranslator:
     def __init__(self):
         self._models: dict[tuple[str, str], MarianMTModel] = {}
@@ -35,6 +36,7 @@ class HelsinkiTranslator:
         self._global_lock = threading.Lock()
         print("✅ HelsinkiTranslator ready (lazy-load mode)")
 
+    # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _get_load_lock(self, pair: tuple[str, str]) -> threading.Lock:
         with self._global_lock:
@@ -81,6 +83,8 @@ class HelsinkiTranslator:
             translated = model.generate(**inputs)
         return tokenizer.decode(translated[0], skip_special_tokens=True)
 
+    # ── Public API ────────────────────────────────────────────────────────────
+
     def ensure_pair_loaded(self, src: str, tgt: str) -> None:
         pair = (src, tgt)
 
@@ -88,6 +92,7 @@ class HelsinkiTranslator:
             if pair not in self._models:
                 self._load_pair(src, tgt)
         elif pair in PIVOT_PAIRS:
+            # Need src→en and en→tgt
             if (src, "en") in MODEL_MAP and (src, "en") not in self._models:
                 self._load_pair(src, "en")
             if ("en", tgt) in MODEL_MAP and ("en", tgt) not in self._models:
@@ -105,30 +110,61 @@ class HelsinkiTranslator:
     ) -> str:
         if src == tgt:
             return text
-        
-        if use_context and context:
-            recent = context[-CONTEXT_WINDOW:]
-            input_text = " | ".join(recent) + " | " + text
-        else:
-            input_text = text
 
         pair = (src, tgt)
 
-        if pair in MODEL_MAP:
-            if pair not in self._models:
-                self._load_pair(src, tgt)
-            return self._translate_direct(input_text, src, tgt)
+        # ── Context-aware translation ─────────────────────────────────────────
 
-        if pair in PIVOT_PAIRS:
-            en_pair = (src, "en")
-            if en_pair not in self._models:
-                self._load_pair(src, "en")
-            en_text = self._translate_direct(input_text, src, "en")
+        if use_context and context:
+            recent = context[-CONTEXT_WINDOW:]
+            context_str = " ".join(recent) 
+            full_str    = context_str + " " + text 
 
-            tgt_pair = ("en", tgt)
-            if tgt_pair not in self._models:
-                self._load_pair("en", tgt)
-            return self._translate_direct(en_text, "en", tgt)
+            if pair in MODEL_MAP:
+                if pair not in self._models:
+                    self._load_pair(src, tgt)
+                context_translated = self._translate_direct(context_str, src, tgt)
+                full_translated    = self._translate_direct(full_str,    src, tgt)
 
-        print(f"[MT] ⚠️  No route for {src}→{tgt}, returning original")
-        return text
+            elif pair in PIVOT_PAIRS:
+                en_pair  = (src, "en")
+                tgt_pair = ("en", tgt)
+                if en_pair  not in self._models: self._load_pair(src, "en")
+                if tgt_pair not in self._models: self._load_pair("en", tgt)
+
+                ctx_en   = self._translate_direct(context_str, src, "en")
+                full_en  = self._translate_direct(full_str,    src, "en")
+                context_translated = self._translate_direct(ctx_en,  "en", tgt)
+                full_translated    = self._translate_direct(full_en, "en", tgt)
+
+            else:
+                print(f"[MT] ⚠️  No route for {src}→{tgt}, returning original")
+                return text
+
+            prefix = context_translated.strip()
+            result = full_translated.strip()
+
+            if prefix and result.startswith(prefix):
+                result = result[len(prefix):].lstrip(" ,.;")
+
+            return result.strip() if result.strip() else full_translated.strip()
+
+        # ── Sentence-level translation ────────────────────────────────────────────
+        else:
+            input_text = text
+
+            if pair in MODEL_MAP:
+                if pair not in self._models:
+                    self._load_pair(src, tgt)
+                return self._translate_direct(input_text, src, tgt)
+
+            if pair in PIVOT_PAIRS:
+                en_pair  = (src, "en")
+                tgt_pair = ("en", tgt)
+                if en_pair  not in self._models: self._load_pair(src, "en")
+                if tgt_pair not in self._models: self._load_pair("en", tgt)
+                en_text = self._translate_direct(input_text, src, "en")
+                return self._translate_direct(en_text, "en", tgt)
+
+            print(f"[MT] ⚠️  No route for {src}→{tgt}, returning original")
+            return text
