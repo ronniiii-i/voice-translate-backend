@@ -1,13 +1,3 @@
-"""
-Voice Call Translation Server
-
-Key design decisions:
-- Max 2 users per room (enforced at join time)
-- One pipeline task per user at a time — excess segments DROPPED, never queued
-- faster-whisper replaces whisper.cpp (no subprocess/file race conditions)
-- 2 ThreadPoolExecutor workers (matches your CPU thread count)
-"""
-
 from logging import config
 import os
 import json
@@ -31,6 +21,8 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 MAX_USERS_PER_ROOM = 2
 
+HISTORY_MAX = 6
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,14 +30,23 @@ async def lifespan(app: FastAPI):
     print("🚀 Initializing Translation Engine...")
     pipeline = TranslationPipeline()
 
-    print("⏳ Pre-warming translation cache...")
-    pairs = [("en", "fr"), ("fr", "en"), ("en", "es"), ("es", "en"), ("en", "de"), ("de", "en")]
-    for src, tgt in pairs:
-        try:
-            pipeline.translator.translate("warmup", src, tgt)
-            print(f"  ✅ {src}→{tgt}")
-        except Exception as e:
-            print(f"  ⚠️  {src}→{tgt}: {e}")
+    # Warm up ASR only — MT models load lazily per session
+    print("⏳ Pre-warming ASR...")
+    try:
+        import tempfile, wave, numpy as np
+        fd, tmp = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        silence = bytes(16000 * 2)  # 1s of silence
+        with wave.open(tmp, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(silence)
+        pipeline.asr.transcribe(tmp, language="en")
+        os.unlink(tmp)
+        print("  ✅ ASR warmed")
+    except Exception as e:
+        print(f"  ⚠️  ASR warmup skipped: {e}")
 
     print("✅ System Ready!")
     yield
@@ -53,7 +54,7 @@ async def lifespan(app: FastAPI):
     rooms.clear()
     executor.shutdown(wait=False)
     if pipeline:
-        pipeline.tts.shutdown()  # cleanly close persistent Piper processes
+        pipeline.tts.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -65,21 +66,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/rooms/{room_id}")
-async def check_room(room_id: str):
-    exists = room_id in rooms
-    count  = len(rooms[room_id]) if exists else 0
-    return {
-        "exists":    exists,
-        "room_id":   room_id,
-        "occupants": count,   # 0, 1, or 2
-    }
-
-
-@app.get("/health")
-async def health():
-    room_info = {rid: list(users.keys()) for rid, users in rooms.items()}
-    return {"status": "ok", "rooms": room_info}
 
 @app.get("/")
 async def root():
@@ -88,15 +74,37 @@ async def root():
         "status": "running",
         "docs": "/docs",
         "health": "/health",
-        "websocket": "wss://<host>/ws/call/{room_id}/{user_id}"
+        "websocket": "wss://<host>/ws/call/{room_id}/{user_id}",
     }
 
-class UserSession:
-    """
-    Manages one user's audio pipeline within a room.
-    Only ONE pipeline task runs at a time — stale audio is dropped.
-    """
 
+@app.get("/health")
+async def health():
+    room_info = {rid: list(users.keys()) for rid, users in rooms.items()}
+    return {"status": "ok", "rooms": room_info}
+
+
+@app.get("/rooms/{room_id}")
+async def check_room(room_id: str):
+    exists = room_id in rooms
+    count = len(rooms[room_id]) if exists else 0
+    return {"exists": exists, "room_id": room_id, "occupants": count}
+
+
+# ── Pre-load helper (runs in executor) ───────────────────────────────────────
+
+def _preload_mt_pairs(lang_a: str, lang_b: str) -> None:
+    try:
+        pipeline.translator.ensure_pair_loaded(lang_a, lang_b)
+        pipeline.translator.ensure_pair_loaded(lang_b, lang_a)
+        print(f"[MT] Session models ready: {lang_a}↔{lang_b}")
+    except Exception as e:
+        print(f"[MT] Preload warning: {e}")
+
+
+# ── UserSession ───────────────────────────────────────────────────────────────
+
+class UserSession:
     def __init__(self, user_id: str, ws: WebSocket, lang: str):
         self.user_id = user_id
         self.ws = ws
@@ -112,13 +120,32 @@ class UserSession:
         self._lock = threading.Lock()
         self.connected = True
 
-    async def handle_chunk(self, chunk: bytes, target: "UserSession"):
+        self._history: list[str] = []
+        self._history_lock = threading.Lock()
+
+    def add_to_history(self, utterance: str) -> None:
+        """Append a transcribed utterance to this user's conversation history."""
+        with self._history_lock:
+            self._history.append(utterance)
+            if len(self._history) > HISTORY_MAX:
+                self._history.pop(0)
+
+    def get_history(self) -> list[str]:
+        """Return a snapshot of the current conversation history."""
+        with self._history_lock:
+            return list(self._history)
+
+    def clear_history(self) -> None:
+        """Reset history on disconnect or call end."""
+        with self._history_lock:
+            self._history.clear()
+
+    async def handle_chunk(self, chunk: bytes, target: "UserSession") -> None:
         """Called for every incoming PCM chunk from this user."""
         should_process, audio = self.vad.add_chunk(chunk)
         if not should_process:
             return
 
-        # Drop if already processing — prevents cascading queue buildup
         with self._lock:
             if self._busy:
                 duration_s = len(audio) / (16000 * 2)
@@ -128,10 +155,12 @@ class UserSession:
 
         asyncio.create_task(self._run_pipeline(audio, target))
 
-    async def _run_pipeline(self, audio: bytes, target: "UserSession"):
+    async def _run_pipeline(self, audio: bytes, target: "UserSession") -> None:
         try:
             duration_s = len(audio) / (16000 * 2)
             print(f"[{self.user_id}] 🔄 Processing {duration_s:.1f}s → {target.user_id}")
+
+            context_snapshot = self.get_history()
 
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
@@ -140,6 +169,7 @@ class UserSession:
                     self._sync_pipeline,
                     audio,
                     target.lang,
+                    context_snapshot,
                 ),
                 timeout=300.0,
             )
@@ -149,11 +179,12 @@ class UserSession:
 
             out_path, src_text, trans_text = result
 
-            # Sentinels from ASR (silence, hallucination, error, etc.)
             if not src_text or src_text.startswith("["):
                 print(f"[{self.user_id}] No usable speech: {src_text}")
                 return
-            
+
+            self.add_to_history(src_text)
+
             if self.connected:
                 try:
                     await self.ws.send_json({
@@ -169,12 +200,6 @@ class UserSession:
                     os.unlink(out_path)
                 return
 
-            # Send caption + audio as one atomic message.
-            # Protocol: JSON header (length-prefixed) + raw WAV bytes.
-            # The frontend updates the caption ONLY when it starts playing
-            # this audio chunk — not when the previous one was still playing.
-            #
-            # Message format: 4-byte big-endian JSON length + JSON + WAV bytes
             if out_path and os.path.exists(out_path):
                 with open(out_path, "rb") as f:
                     audio_bytes = f.read()
@@ -186,17 +211,18 @@ class UserSession:
                     "text": trans_text,
                     "original": src_text,
                 }).encode("utf-8")
-                # 4-byte header = length of JSON, then JSON, then WAV bytes
                 framed = _struct.pack(">I", len(meta)) + meta + audio_bytes
                 await target.ws.send_bytes(framed)
             else:
-                # TTS failed but we still have the translation — send caption only
+                # TTS failed — send text caption only
                 await target.ws.send_json({
                     "type": "caption",
                     "text": trans_text,
                     "original": src_text,
                 })
-            print(f'✅ {self.user_id}→{target.user_id}: "{src_text[:60]}" → "{trans_text[:60]}"')
+
+            print(f'✅ {self.user_id}→{target.user_id}: '
+                  f'"{src_text[:60]}" → "{trans_text[:60]}"')
 
         except asyncio.TimeoutError:
             print(f"❌ [{self.user_id}] Pipeline timeout (>300s)")
@@ -212,40 +238,51 @@ class UserSession:
             with self._lock:
                 self._busy = False
 
-    def _sync_pipeline(self, audio_data: bytes, target_lang: str):
+    def _sync_pipeline(
+        self,
+        audio_data: bytes,
+        target_lang: str,
+        context: list[str],
+    ):
         """
         Runs in ThreadPoolExecutor.
-        Writes raw PCM to a proper WAV file, then runs ASR → MT → TTS.
+        Writes raw PCM to a WAV file, then runs ASR → context-aware MT → TTS.
         """
         wav_path = None
         try:
-            # Write PCM bytes as a valid WAV file so Whisper can read it
             fd, wav_path = tempfile.mkstemp(suffix=".wav")
             os.close(fd)
 
             with wave.open(wav_path, "wb") as wf:
-                wf.setnchannels(1)       # mono
-                wf.setsampwidth(2)       # 16-bit = 2 bytes
-                wf.setframerate(16000)   # 16kHz — must match browser AudioContext
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
                 wf.writeframes(audio_data)
 
             file_size = os.path.getsize(wav_path)
-            print(f"[Pipeline] WAV written: {file_size} bytes, {len(audio_data)//32000:.1f}s")
+            print(f"[Pipeline] WAV written: {file_size} bytes, "
+                  f"{len(audio_data) // 32000:.1f}s")
 
-            return pipeline.process_audio(wav_path, self.lang, target_lang)
+            return pipeline.process_audio(
+                wav_path,
+                self.lang,
+                target_lang,
+                context=context,
+            )
 
         except Exception as e:
             print(f"[Pipeline] Sync error: {e}")
             return None
 
         finally:
-            # Always clean up the WAV file (TTS output is cleaned in _run_pipeline)
             if wav_path and os.path.exists(wav_path):
                 try:
                     os.unlink(wav_path)
                 except Exception:
                     pass
 
+
+# ── WebSocket endpoint ────────────────────────────────────────────────────────
 
 @app.websocket("/ws/call/{room_id}/{user_id}")
 async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
@@ -266,7 +303,7 @@ async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
         # ── Handshake ────────────────────────────────────────────────────────
         try:
             raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
-            config = json.loads(raw)
+            cfg = json.loads(raw)
         except asyncio.TimeoutError:
             await websocket.send_json({"type": "error", "message": "Handshake timed out"})
             return
@@ -274,26 +311,31 @@ async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
             await websocket.send_json({"type": "error", "message": "Invalid JSON in handshake"})
             return
 
-        lang = config.get("native_lang", "en")
+        lang = cfg.get("native_lang", "en")
+        display_name = cfg.get("display_name", user_id)
+
         session = UserSession(user_id, websocket, lang)
+        session.display_name = display_name
         room[user_id] = session
 
         print(f"📡 {user_id} joined room '{room_id}' [{lang}] ({len(room)}/{MAX_USERS_PER_ROOM})")
         await websocket.send_json({"type": "connected", "user_id": user_id, "room": room_id})
 
-        # Store display_name on the session
-        display_name = config.get("display_name", user_id)
-        session.display_name = display_name
-        
-        # Notify peer if they're already in the room
+        # ── Peer notification + MT pre-load ──────────────────────────────────
         peer = _get_peer(room_id, user_id)
         if peer:
+            # Tell existing peer that someone joined
             try:
-                await peer.ws.send_json({"type": "peer_joined", "peer_id": user_id, "display_name": display_name})
+                await peer.ws.send_json({
+                    "type": "peer_joined",
+                    "peer_id": user_id,
+                    "display_name": display_name,
+                })
                 session.vad._reset()
             except Exception:
                 pass
-            # Also tell the joining user that a peer is already here
+
+            # Tell joining user that a peer is already here
             try:
                 await websocket.send_json({
                     "type": "peer_joined",
@@ -303,6 +345,16 @@ async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
                 session.vad._reset()
             except Exception:
                 pass
+
+            # Pre-load MT models for this session's language pair in background.
+            # We await this so models are ready before audio starts flowing.
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                executor,
+                _preload_mt_pairs,
+                session.lang,
+                peer.lang,
+            )
 
         # ── Main receive loop ────────────────────────────────────────────────
         while True:
@@ -315,7 +367,6 @@ async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
                 peer = _get_peer(room_id, user_id)
                 if peer:
                     await session.handle_chunk(msg["bytes"], peer)
-                # If no peer yet, silently discard — VAD would buffer needlessly
 
             elif "text" in msg:
                 try:
@@ -335,31 +386,35 @@ async def voice_bridge(websocket: WebSocket, room_id: str, user_id: str):
     finally:
         if session:
             session.connected = False
+            session.clear_history()
 
-        # Clean up room entry
         room = rooms.get(room_id, {})
         room.pop(user_id, None)
         if not room:
             rooms.pop(room_id, None)
 
-        # Notify peer of disconnection
         peer = _get_peer(room_id, user_id)
         if peer:
             try:
-                await peer.ws.send_json({"type": "peer_left", "peer_id": user_id, "display_name": getattr(session, "display_name", user_id)})
+                await peer.ws.send_json({
+                    "type": "peer_left",
+                    "peer_id": user_id,
+                    "display_name": getattr(session, "display_name", user_id),
+                })
             except Exception:
                 pass
 
         print(f"🔌 {user_id} left room '{room_id}'")
 
 
-def _get_peer(room_id: str, exclude_user_id: str):
-    """Return the other user in the room, or None."""
+def _get_peer(room_id: str, exclude_user_id: str) -> UserSession | None:
+    """Return the other connected user in the room, or None."""
     room = rooms.get(room_id, {})
-    for uid, session in room.items():
-        if uid != exclude_user_id and session.connected:
-            return session
+    for uid, sess in room.items():
+        if uid != exclude_user_id and sess.connected:
+            return sess
     return None
+
 
 if __name__ == "__main__":
     uvicorn.run(
@@ -367,5 +422,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 8000)),
         log_level="info",
-        reload=False,  
+        reload=False,
     )
