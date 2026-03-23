@@ -16,9 +16,12 @@ __pycache__/
 
 # --- Temporary Files / Audio ---
 *.wav
+!/backend/evaluation/recordings/*.wav
+*.m4a
 *.json
 /tmp/
 temp_audio/
+mos_clips/
 
 # --- Operating System ---
 .DS_Store

@@ -29,38 +29,40 @@ PIVOT_PAIRS: frozenset[tuple[str, str]] = frozenset({
 
 CONTEXT_WINDOW = 3
 
-_PRONOUN_SUBJECT = re.compile(
-    r'\b(he|she|they|it|him|her|them|his|hers|their|its)\b',
+# Only replace SUBJECT pronouns — never object pronouns (him, her, it, them, its)
+_PRONOUN_SUBJECT_ONLY = re.compile(
+    r'\b(he|she|they)\b',
     re.IGNORECASE
 )
 
 _NAME_PATTERN = re.compile(r'\b[A-Z][a-z]{2,}\b')
 
+_NOT_NAMES = {
+    "The", "A", "An", "This", "That", "These", "Those",
+    "I", "You", "We", "They", "He", "She", "It",
+    "Have", "Has", "Had", "Can", "Could", "Would", "Should",
+    "Will", "Shall", "May", "Might", "Must", "Do", "Does",
+    "Please", "Thank", "Yes", "No", "Mr", "Mrs", "Ms", "Dr",
+}
+
 
 def _resolve_pronouns(text: str, context: list[str]) -> str:
-    if not _PRONOUN_SUBJECT.search(text):
-        return text  
-
+    if not _PRONOUN_SUBJECT_ONLY.search(text):
+        return text
     candidate = None
     for utt in reversed(context):
         names = _NAME_PATTERN.findall(utt)
-        names = [n for n in names if n not in (
-            "The", "A", "An", "This", "That", "These", "Those",
-            "I", "You", "We", "They", "He", "She", "It"
-        )]
+        names = [n for n in names if n not in _NOT_NAMES]
         if names:
             candidate = names[-1]
             break
-
     if not candidate:
-        return text 
-
-    resolved = _PRONOUN_SUBJECT.sub(candidate, text)
+        return text
+    resolved = _PRONOUN_SUBJECT_ONLY.sub(candidate, text)
     if resolved != text:
         print(f"[MT] Pronoun resolved: '{text}' → '{resolved}' "
               f"(candidate: {candidate})")
     return resolved
-
 
 class HelsinkiTranslator:
     def __init__(self):
