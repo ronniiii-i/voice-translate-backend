@@ -16,7 +16,7 @@ __pycache__/
 
 # --- Temporary Files / Audio ---
 *.wav
-!/backend/evaluation/recordings/*.wav
+# !/backend/evaluation/recordings/*.wav
 *.m4a
 *.json
 /tmp/
