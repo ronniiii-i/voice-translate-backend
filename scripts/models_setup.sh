@@ -72,42 +72,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 echo "✅ Python dependencies installed."
 
-# --- 4. ARGOS TRANSLATE LANGUAGE PAIRS ---
-echo "🤖 Installing Argos Translate language pairs..."
-# Languages: English, French, German, Spanish, Chinese
-# Direct pairs are installed where available.
-# Pairs without a direct package (e.g. zh<->de) pivot through English at runtime.
-python3 - << 'PYEOF'
-import argostranslate.package
-
-PAIRS = [
-    ("en", "fr"), ("fr", "en"),
-    ("en", "de"), ("de", "en"),
-    ("en", "es"), ("es", "en"),
-    ("en", "zh"), ("zh", "en"),
-    ("fr", "de"), ("de", "fr"),
-    ("fr", "es"), ("es", "fr"),
-    ("de", "es"), ("es", "de"),
-]
-
-print("Updating Argos package index...")
-argostranslate.package.update_package_index()
-available = argostranslate.package.get_available_packages()
-available_map = {(p.from_code, p.to_code): p for p in available}
-
-for src, tgt in PAIRS:
-    pkg = available_map.get((src, tgt))
-    if pkg:
-        print(f"  Installing {src} -> {tgt}...")
-        argostranslate.package.install_from_path(pkg.download())
-        print(f"  ✅ {src} -> {tgt}")
-    else:
-        print(f"  ⚠️  No direct package for {src} -> {tgt} (will pivot via English at runtime)")
-
-print("Argos language packs installed.")
-PYEOF
-
-# --- 5. SYSTEM DEPENDENCIES CHECK ---
+# --- 4. SYSTEM DEPENDENCIES CHECK ---
 echo "🔍 Checking system dependencies..."
 
 if ! command -v ffmpeg &> /dev/null; then
