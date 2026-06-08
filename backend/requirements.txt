@@ -26,3 +26,7 @@ webrtcvad
 
 # System/Subprocess utilities
 pathlib>=1.0.1
+
+# Evaluation — dataset downloading and audio I/O
+datasets>=2.14.0
+soundfile>=0.12.0

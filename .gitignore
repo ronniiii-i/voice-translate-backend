@@ -22,6 +22,8 @@ __pycache__/
 /tmp/
 temp_audio/
 mos_clips/
+evaluation/audio_cache/
+evaluation/dataset_cache/
 
 # --- Operating System ---
 .DS_Store
