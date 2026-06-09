@@ -6,7 +6,8 @@ Downloads evaluation data from HuggingFace Hub using streaming mode
 between runs.
 
 Datasets used:
-  ASR:     google/fleurs (primary) + mozilla-foundation/common_voice_17_0 (supplement)
+  ASR:     google/fleurs (primary) + facebook/voxpopuli (supplement, EN/FR/DE/ES only)
+           Note: Mozilla Common Voice was removed from HuggingFace in October 2025.
   BLEU:    open_subtitles (parallel sentence pairs, conversational)
   Context: open_subtitles (consecutive subtitle pairs filtered for pronouns)
 
@@ -27,6 +28,11 @@ import soundfile as sf
 from pathlib import Path
 from scipy import signal as scipy_signal
 
+# Tell the datasets library to use soundfile for audio decoding instead of
+# the default torchcodec (which requires a separate GPU-oriented install).
+# Must be set before any `from datasets import ...` call.
+os.environ.setdefault("DATASETS_AUDIO_BACKEND", "soundfile")
+
 EVAL_DIR        = Path(__file__).parent
 CACHE_DIR       = EVAL_DIR / "dataset_cache"
 AUDIO_CACHE_DIR = EVAL_DIR / "audio_cache"
@@ -44,12 +50,14 @@ FLEURS_LANG = {
     "zh": "cmn_hans_cn",
 }
 
-CV_LANG = {
+# VoxPopuli (facebook/voxpopuli) — supplement for European languages only.
+# Common Voice was removed from HuggingFace in October 2025.
+# ZH has no VoxPopuli support; FLEURS cmn_hans_cn alone covers it.
+VOXPOPULI_LANG = {
     "en": "en",
     "fr": "fr",
     "de": "de",
     "es": "es",
-    "zh": "zh-CN",
 }
 
 # OpenSubtitles uses ISO 639-1; Chinese is "zh" in their index
@@ -127,61 +135,55 @@ def get_asr_samples(lang: str, n: int = 100, seed: int = 42) -> list[tuple[str, 
     try:
         ds = load_dataset(
             "google/fleurs", fleurs_code,
-            split="test", streaming=True, trust_remote_code=True,
+            split="test", streaming=True,
         )
-        pool = []
+        # Write each clip to disk immediately — no in-memory audio buffering.
+        # FLEURS test split is ~500-1500 items; we stop as soon as we have n.
         for item in ds:
             text = (item.get("transcription") or item.get("raw_transcription") or "").strip()
-            if text and MIN_WORDS <= _wc(text) <= MAX_WORDS:
-                pool.append(item)
-            if len(pool) >= n * 5:
-                break
-
-        rng.shuffle(pool)
-        for item in pool[:n]:
+            if not (text and MIN_WORDS <= _wc(text) <= MAX_WORDS):
+                continue
             audio = item["audio"]
-            text  = (item.get("transcription") or item.get("raw_transcription", "")).strip()
             arr   = _resample(np.array(audio["array"]), audio["sampling_rate"])
             idx   = len(samples) + 1
             wav   = str(lang_dir / f"{idx:04d}.wav")
             sf.write(wav, arr, 16000)
             samples.append((wav, text))
+            if len(samples) >= n:
+                break
 
         print(f"  FLEURS → {len(samples)} samples")
     except Exception as e:
         print(f"  FLEURS failed for {lang}: {e}")
 
-    # ── Common Voice supplement ───────────────────────────────────────────────
-    if len(samples) < n:
+    # ── VoxPopuli supplement (European languages only) ────────────────────────
+    # Common Voice was removed from HuggingFace in October 2025.
+    # VoxPopuli covers EN/FR/DE/ES; ZH relies on FLEURS alone.
+    if len(samples) < n and lang in VOXPOPULI_LANG:
         needed  = n - len(samples)
-        cv_code = CV_LANG[lang]
-        print(f"[datasets] Common Voice '{cv_code}' supplement ({needed} needed)...")
+        vp_code = VOXPOPULI_LANG[lang]
+        print(f"[datasets] VoxPopuli '{vp_code}' supplement ({needed} needed)...")
         try:
             ds = load_dataset(
-                "mozilla-foundation/common_voice_17_0", cv_code,
-                split="test", streaming=True, trust_remote_code=True,
+                "facebook/voxpopuli", vp_code,
+                split="test", streaming=True,
             )
-            pool = []
             for item in ds:
-                text = item.get("sentence", "").strip()
-                if text and MIN_WORDS <= _wc(text) <= MAX_WORDS:
-                    pool.append(item)
-                if len(pool) >= needed * 5:
-                    break
-
-            rng.shuffle(pool)
-            for item in pool[:needed]:
+                text = (item.get("normalized_text") or item.get("raw_text") or "").strip()
+                if not (text and MIN_WORDS <= _wc(text) <= MAX_WORDS):
+                    continue
                 audio = item["audio"]
-                text  = item["sentence"].strip()
                 arr   = _resample(np.array(audio["array"]), audio["sampling_rate"])
                 idx   = len(samples) + 1
                 wav   = str(lang_dir / f"{idx:04d}.wav")
                 sf.write(wav, arr, 16000)
                 samples.append((wav, text))
+                if len(samples) >= n:
+                    break
 
             print(f"  After supplement → {len(samples)} samples")
         except Exception as e:
-            print(f"  Common Voice failed for {lang}: {e}")
+            print(f"  VoxPopuli supplement skipped: {e}")
 
     if not samples:
         raise RuntimeError(
