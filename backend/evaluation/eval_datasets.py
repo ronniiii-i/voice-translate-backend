@@ -375,9 +375,8 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
     opus-100:   EN-centric; non-EN pairs joined via shared EN pivot sentences.
     Both use held-out test/devtest splits — no training data leakage.
     """
-    import sacrebleu as _sb
-
-    cache_name = f"bleu5_{src}_{tgt}_{n}_{seed}"
+    import sacrebleu as _sb  # noqa: F401 kept for potential future use
+    cache_name = f"bleu6_{src}_{tgt}_{n}_{seed}"
     cached = _load_cache(cache_name)
     if cached:
         print(f"[cache] BLEU {src}→{tgt}: {len(cached)} pairs")
@@ -411,21 +410,18 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
         _save_cache(cache_name, pairs)
         return pairs
 
-    # Use self-BLEU as a reference quality proxy: cleaner references score higher
-    zh_routes  = {src, tgt} & {"zh"}
-    tokenize   = "zh" if zh_routes else "13a"
-    best_name, best_pairs, best_score = None, None, -1.0
-    for name, pairs in candidates.items():
-        hyps  = [s for s, _ in pairs]
-        refs  = [r for _, r in pairs]
-        score = _sb.corpus_bleu(hyps, [refs], tokenize=tokenize).score
-        print(f"  {name} self-BLEU proxy: {score:.1f}")
-        if score > best_score:
-            best_score, best_name, best_pairs = score, name, pairs
+    # Always prefer flores_plus — it has clean, properly aligned human translations.
+    # The self-BLEU proxy was backwards: noisy opus-100 subtitle references score
+    # higher on n-gram self-overlap, which is the wrong quality signal.
+    if "FLORES-200" in candidates:
+        print(f"  → Using FLORES-200 (preferred clean dataset)")
+        _save_cache(cache_name, candidates["FLORES-200"])
+        return candidates["FLORES-200"]
 
-    print(f"  → Selecting {best_name} (proxy {best_score:.1f})")
-    _save_cache(cache_name, best_pairs)
-    return best_pairs
+    name, pairs = next(iter(candidates.items()))
+    print(f"  → Using {name}")
+    _save_cache(cache_name, pairs)
+    return pairs
 
 
 def get_context_sequences(
