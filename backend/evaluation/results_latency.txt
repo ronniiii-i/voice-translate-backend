@@ -1,0 +1,16 @@
+LATENCY RESULTS
+========================================================================
+Language Pair           Avg (s)      Min      Max    StDev    N Dominant Stage
+------------------------------------------------------------------------
+EN↔FR (direct)             6.49     3.97     8.54     1.67    5  ASR
+EN↔DE (direct)             4.14     2.40     5.87     1.51    5  ASR
+EN↔ES (direct)             3.04     2.39     3.85     0.72    5  ASR
+EN↔ZH (direct)             5.41     2.42    14.27     5.00    5  ASR + TTS
+FR↔DE (direct)            15.51     3.28    35.80    12.70    5  ASR
+FR↔ZH (pivot)             24.46    10.58    35.48    10.48    5  ASR + MT (×2)
+DE↔ZH (pivot)             13.68     7.56    22.31     6.60    5  ASR + MT (×2)
+ES↔ZH (pivot)             32.45     7.86   109.63    43.63    5  ASR + MT (×2)
+========================================================================
+
+Samples per pair: 5
+Note: pipeline latency only (excludes network round-trip)
