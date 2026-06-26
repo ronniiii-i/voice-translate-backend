@@ -8,8 +8,8 @@ between runs.
 Datasets used:
   ASR:     google/fleurs (primary) + facebook/voxpopuli (supplement, EN/FR/DE/ES only)
            Note: Mozilla Common Voice was removed from HuggingFace in October 2025.
-  BLEU:    open_subtitles (parallel sentence pairs, conversational)
-  Context: open_subtitles (consecutive subtitle pairs filtered for pronouns)
+  BLEU:    Helsinki-NLP/opus-100 (parallel sentence pairs, OpenSubtitles-derived)
+  Context: Helsinki-NLP/opus-100 (consecutive pairs filtered for pronouns)
 
 Cache layout:
   evaluation/audio_cache/{lang}/0001.wav ...
@@ -215,12 +215,13 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
     rng  = random.Random(seed)
     pairs: list[tuple[str, str]] = []
 
-    # Try (l1, l2) then (l2, l1) — OpenSubtitles requires alphabetical ordering
+    # Try (l1, l2) then (l2, l1) — opus-100 config name must be alphabetical
     for a, b, swapped in [(l1, l2, False), (l2, l1, True)]:
         try:
-            print(f"[datasets] OpenSubtitles lang1={a} lang2={b}...")
+            config = f"{a}-{b}"
+            print(f"[datasets] Helsinki-NLP/opus-100 config={config}...")
             ds = load_dataset(
-                "opus_open_subtitles", lang1=a, lang2=b,
+                "Helsinki-NLP/opus-100", config,
                 split="train", streaming=True,
             )
             pool: list[tuple[str, str]] = []
@@ -242,12 +243,12 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
                 break
 
         except Exception as e:
-            print(f"  OpenSubtitles {a}-{b} failed: {e}")
+            print(f"  opus-100 {a}-{b} failed: {e}")
 
     if not pairs:
         raise RuntimeError(
             f"Could not obtain BLEU pairs for {src}→{tgt}. "
-            "Check network connectivity and OpenSubtitles availability."
+            "Check network connectivity and HuggingFace dataset availability."
         )
 
     _save_cache(cache_name, pairs)
@@ -283,9 +284,10 @@ def get_context_sequences(
     # Only try (l1=src, l2=tgt) — context eval always has src=en
     for a, b, swapped in [(l1, l2, False), (l2, l1, True)]:
         try:
-            print(f"[datasets] OpenSubtitles {a}-{b} for context sequences...")
+            config = f"{a}-{b}"
+            print(f"[datasets] Helsinki-NLP/opus-100 config={config} for context sequences...")
             ds = load_dataset(
-                "opus_open_subtitles", lang1=a, lang2=b,
+                "Helsinki-NLP/opus-100", config,
                 split="train", streaming=True,
             )
 
@@ -340,12 +342,12 @@ def get_context_sequences(
                 break
 
         except Exception as e:
-            print(f"  OpenSubtitles {a}-{b} failed: {e}")
+            print(f"  opus-100 {a}-{b} failed: {e}")
 
     if not seqs:
         raise RuntimeError(
             f"Could not obtain context sequences for {src}→{tgt}. "
-            "Check network connectivity and OpenSubtitles availability."
+            "Check network connectivity and HuggingFace dataset availability."
         )
 
     _save_cache(cache_name, seqs)
