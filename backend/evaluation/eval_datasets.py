@@ -67,7 +67,7 @@ FLORES_LANG = {
     "fr": "fra_Latn",
     "de": "deu_Latn",
     "es": "spa_Latn",
-    "zh": "zho_Hans",
+    "zh": "cmn_Hans",   # flores_plus uses cmn_Hans, not zho_Hans
 }
 
 # opus-100 only has EN-centric pairs; non-EN pairs pivot through EN in dataset layer
@@ -228,8 +228,9 @@ def _bleu_pairs_from_flores(src: str, tgt: str, n: int, seed: int) -> list[tuple
     rng.shuffle(indices)
 
     for i in indices:
-        s = ds_src[i].get("sentence", "").strip()
-        t = ds_tgt[i].get("sentence", "").strip()
+        # flores_plus uses 'text'; original flores used 'sentence'
+        s = (ds_src[i].get("text") or ds_src[i].get("sentence") or "").strip()
+        t = (ds_tgt[i].get("text") or ds_tgt[i].get("sentence") or "").strip()
         if s and t and MIN_WORDS <= _wc(s) <= MAX_WORDS:
             pool.append((s, t))
         if len(pool) >= n:
@@ -349,7 +350,11 @@ def _bleu_pairs_from_opus100(src: str, tgt: str, n: int, seed: int) -> list[tupl
         if pairs:
             return pairs
 
-    # ── Step 2: chain-pivot through EN ───────────────────────────────────────
+    # ── Step 2: chain-pivot through EN (last resort — positionally misaligned) ─
+    # Only use if direct configs failed AND flores_plus also failed.
+    # Chain-pivot pairs sentences from two independent corpora by position,
+    # not by meaning — BLEU will be near-zero. Flag this clearly.
+    print(f"[datasets] WARNING: chain-pivot for {src}→{tgt} — refs will be misaligned, BLEU unreliable")
     print(f"[datasets] opus-100 chain-pivot {src}→en→{tgt}...")
     pairs = _load_lang_map(l_src, l_tgt)
     if pairs:
@@ -372,7 +377,7 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
     """
     import sacrebleu as _sb
 
-    cache_name = f"bleu4_{src}_{tgt}_{n}_{seed}"
+    cache_name = f"bleu5_{src}_{tgt}_{n}_{seed}"
     cached = _load_cache(cache_name)
     if cached:
         print(f"[cache] BLEU {src}→{tgt}: {len(cached)} pairs")
