@@ -220,7 +220,7 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
         try:
             print(f"[datasets] OpenSubtitles lang1={a} lang2={b}...")
             ds = load_dataset(
-                "yis948/open_subtitles", lang1=a, lang2=b,
+                "opus_open_subtitles", lang1=a, lang2=b,
                 split="train", streaming=True,
             )
             pool: list[tuple[str, str]] = []
@@ -285,7 +285,7 @@ def get_context_sequences(
         try:
             print(f"[datasets] OpenSubtitles {a}-{b} for context sequences...")
             ds = load_dataset(
-                "yis948/open_subtitles", lang1=a, lang2=b,
+                "opus_open_subtitles", lang1=a, lang2=b,
                 split="train", streaming=True,
             )
 
