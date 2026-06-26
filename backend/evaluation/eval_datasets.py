@@ -241,75 +241,103 @@ def _bleu_pairs_from_flores(src: str, tgt: str, n: int, seed: int) -> list[tuple
 
 def _bleu_pairs_from_opus100(src: str, tgt: str, n: int, seed: int) -> list[tuple[str, str]]:
     """
-    Fetch parallel pairs from Helsinki-NLP/opus-100 (test split).
-    opus-100 is EN-centric; non-EN pairs (fr-es, fr-de, etc.) are obtained by
-    loading two EN-pivot configs and intersecting on the shared EN sentence.
-    Uses test split — training split is noisy (mixed scripts, bilingual subtitles).
+    Fetch parallel pairs from Helsinki-NLP/opus-100.
+
+    Strategy (in order):
+    1. Try a direct config (test split, then train split) for both orderings.
+       Works for EN-centric pairs and the handful of non-EN configs that exist
+       (fr-zh, de-fr, de-zh, de-nl, de-ru, nl-zh, ru-zh, …).
+    2. For non-EN pairs with no direct config, pivot through EN: load two
+       train-split EN configs and intersect on the shared EN sentence.
+       Cap at PIVOT_SCAN items to keep runtime reasonable.
     """
     from datasets import load_dataset
+
+    PIVOT_SCAN = 5000   # max items to scan per EN-pivot config
 
     rng   = random.Random(seed)
     l_src = OPUS100_LANG.get(src, src)
     l_tgt = OPUS100_LANG.get(tgt, tgt)
 
+    def _try_direct(a: str, b: str, swapped: bool) -> list[tuple[str, str]]:
+        """Try loading config a-b from test then train split."""
+        config = f"{a}-{b}"
+        for split in ("test", "train"):
+            try:
+                print(f"[datasets] opus-100 {config} ({split} split)...")
+                ds   = load_dataset("Helsinki-NLP/opus-100", config,
+                                    split=split, streaming=True)
+                pool: list[tuple[str, str]] = []
+                scanned = 0
+                for item in ds:
+                    scanned += 1
+                    tr = item.get("translation", {})
+                    s  = tr.get(a, "").strip()
+                    t  = tr.get(b, "").strip()
+                    if not s or not t:
+                        continue
+                    if MIN_WORDS <= _wc(s) <= MAX_WORDS and MIN_WORDS <= _wc(t) <= MAX_WORDS:
+                        pool.append((t, s) if swapped else (s, t))
+                    if len(pool) >= n * 10 or (split == "train" and scanned >= PIVOT_SCAN):
+                        break
+                if pool:
+                    rng.shuffle(pool)
+                    result = pool[:n]
+                    print(f"  opus-100 {config} → {len(result)} pairs")
+                    return result
+            except Exception as e:
+                print(f"  opus-100 {config} ({split}) failed: {e}")
+        return []
+
     def _load_en_pivot(lang: str) -> dict:
-        """Returns {en_sentence: other_sentence} for one EN-paired config."""
-        a, b    = ("en", lang) if lang > "en" else (lang, "en")
-        config  = f"{a}-{b}"
-        result  = {}
-        try:
-            ds = load_dataset("Helsinki-NLP/opus-100", config, split="test", streaming=True)
-            for item in ds:
-                tr  = item.get("translation", {})
-                en  = tr.get("en", "").strip()
-                oth = tr.get(lang, "").strip()
-                if en and oth and MIN_WORDS <= _wc(en) <= MAX_WORDS:
-                    result[en] = oth
-        except Exception as e:
-            print(f"  opus-100 {config} failed: {e}")
+        """Returns {en_sentence: other_sentence} scanning up to PIVOT_SCAN items."""
+        a, b   = ("en", lang) if lang > "en" else (lang, "en")
+        config = f"{a}-{b}"
+        result = {}
+        for split in ("test", "train"):
+            try:
+                ds      = load_dataset("Helsinki-NLP/opus-100", config,
+                                       split=split, streaming=True)
+                scanned = 0
+                for item in ds:
+                    scanned += 1
+                    tr  = item.get("translation", {})
+                    en  = tr.get("en", "").strip()
+                    oth = tr.get(lang, "").strip()
+                    if en and oth and MIN_WORDS <= _wc(en) <= MAX_WORDS:
+                        result[en] = oth
+                    if scanned >= PIVOT_SCAN:
+                        break
+                if result:
+                    break
+            except Exception as e:
+                print(f"  opus-100 {config} ({split}) pivot failed: {e}")
         return result
 
     pairs: list[tuple[str, str]] = []
 
-    if src == "en" or tgt == "en":
-        other  = tgt if src == "en" else src
-        a, b   = ("en", other) if other > "en" else (other, "en")
-        config = f"{a}-{b}"
-        try:
-            print(f"[datasets] opus-100 {config} (test split)...")
-            ds = load_dataset("Helsinki-NLP/opus-100", config, split="test", streaming=True)
-            pool: list[tuple[str, str]] = []
-            for item in ds:
-                tr = item.get("translation", {})
-                s  = tr.get(a, "").strip()
-                t  = tr.get(b, "").strip()
-                if not s or not t:
-                    continue
-                if MIN_WORDS <= _wc(s) <= MAX_WORDS and MIN_WORDS <= _wc(t) <= MAX_WORDS:
-                    pool.append((t, s) if (a != src) else (s, t))
-            rng.shuffle(pool)
-            pairs = pool[:n]
-            print(f"  opus-100 → {len(pairs)} pairs")
-        except Exception as e:
-            print(f"  opus-100 {config} failed: {e}")
-    else:
-        # Non-EN pair: intersect two EN-pivot configs on the shared EN key
-        print(f"[datasets] opus-100 {src}↔en + {tgt}↔en pivot (test split)...")
-        src_map = _load_en_pivot(l_src)   # {en: src_text}
-        tgt_map = _load_en_pivot(l_tgt)   # {en: tgt_text}
-        common  = list(set(src_map) & set(tgt_map))
-        rng.shuffle(common)
-        pool = []
-        for en_key in common:
-            s = src_map[en_key]
-            t = tgt_map[en_key]
-            if s and t:
-                pool.append((s, t))
-            if len(pool) >= n:
-                break
-        pairs = pool[:n]
-        print(f"  opus-100 pivot → {len(pairs)} pairs")
+    # ── Step 1: try direct configs (both orderings) ───────────────────────────
+    for a, b, swapped in [(l_src, l_tgt, False), (l_tgt, l_src, True)]:
+        pairs = _try_direct(a, b, swapped)
+        if pairs:
+            return pairs
 
+    # ── Step 2: EN-pivot fallback ─────────────────────────────────────────────
+    print(f"[datasets] opus-100 {src}↔en + {tgt}↔en pivot...")
+    src_map = _load_en_pivot(l_src)
+    tgt_map = _load_en_pivot(l_tgt)
+    common  = list(set(src_map) & set(tgt_map))
+    rng.shuffle(common)
+    pool = []
+    for en_key in common:
+        s = src_map[en_key]
+        t = tgt_map[en_key]
+        if s and t:
+            pool.append((s, t))
+        if len(pool) >= n:
+            break
+    pairs = pool[:n]
+    print(f"  opus-100 pivot → {len(pairs)} pairs")
     return pairs
 
 
@@ -326,7 +354,7 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
     """
     import sacrebleu as _sb
 
-    cache_name = f"bleu2_{src}_{tgt}_{n}_{seed}"
+    cache_name = f"bleu3_{src}_{tgt}_{n}_{seed}"
     cached = _load_cache(cache_name)
     if cached:
         print(f"[cache] BLEU {src}→{tgt}: {len(cached)} pairs")
