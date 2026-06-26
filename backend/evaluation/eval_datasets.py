@@ -8,7 +8,7 @@ between runs.
 Datasets used:
   ASR:     google/fleurs (primary) + facebook/voxpopuli (supplement, EN/FR/DE/ES only)
            Note: Mozilla Common Voice was removed from HuggingFace in October 2025.
-  BLEU:    FLORES-200 (primary, facebook/flores devtest) + Helsinki-NLP/opus-100 (fallback)
+  BLEU:    openlanguagedata/flores_plus (primary, devtest split) + Helsinki-NLP/opus-100 (fallback)
            Best-of-two selection via self-BLEU proxy. All 13 routes supported.
   Context: Helsinki-NLP/opus-100 (consecutive pairs filtered for pronouns)
 
@@ -218,9 +218,9 @@ def _bleu_pairs_from_flores(src: str, tgt: str, n: int, seed: int) -> list[tuple
     if not src_code or not tgt_code:
         raise ValueError(f"No FLORES code for {src} or {tgt}")
 
-    print(f"[datasets] FLORES-200 {src}→{tgt} ({src_code} / {tgt_code})...")
-    ds_src = list(load_dataset("facebook/flores", src_code, split="devtest", streaming=False))
-    ds_tgt = list(load_dataset("facebook/flores", tgt_code, split="devtest", streaming=False))
+    print(f"[datasets] flores_plus {src}→{tgt} ({src_code} / {tgt_code})...")
+    ds_src = list(load_dataset("openlanguagedata/flores_plus", src_code, split="devtest", streaming=False))
+    ds_tgt = list(load_dataset("openlanguagedata/flores_plus", tgt_code, split="devtest", streaming=False))
 
     rng  = random.Random(seed)
     pool: list[tuple[str, str]] = []
@@ -235,7 +235,7 @@ def _bleu_pairs_from_flores(src: str, tgt: str, n: int, seed: int) -> list[tuple
         if len(pool) >= n:
             break
 
-    print(f"  FLORES-200 → {len(pool)} pairs")
+    print(f"  flores_plus → {len(pool)} pairs")
     return pool
 
 
@@ -253,7 +253,7 @@ def _bleu_pairs_from_opus100(src: str, tgt: str, n: int, seed: int) -> list[tupl
     """
     from datasets import load_dataset
 
-    PIVOT_SCAN = 5000   # max items to scan per EN-pivot config
+    PIVOT_SCAN = 10000   # max items to scan per EN-pivot config
 
     rng   = random.Random(seed)
     l_src = OPUS100_LANG.get(src, src)
@@ -289,29 +289,56 @@ def _bleu_pairs_from_opus100(src: str, tgt: str, n: int, seed: int) -> list[tupl
                 print(f"  opus-100 {config} ({split}) failed: {e}")
         return []
 
-    def _load_en_pivot(lang: str) -> dict:
-        """Returns {en_sentence: other_sentence} scanning up to PIVOT_SCAN items."""
-        a, b   = ("en", lang) if lang > "en" else (lang, "en")
-        config = f"{a}-{b}"
-        result = {}
-        for split in ("test", "train"):
-            try:
-                ds      = load_dataset("Helsinki-NLP/opus-100", config,
-                                       split=split, streaming=True)
-                scanned = 0
-                for item in ds:
-                    scanned += 1
-                    tr  = item.get("translation", {})
-                    en  = tr.get("en", "").strip()
-                    oth = tr.get(lang, "").strip()
-                    if en and oth and MIN_WORDS <= _wc(en) <= MAX_WORDS:
-                        result[en] = oth
-                    if scanned >= PIVOT_SCAN:
+    def _load_lang_map(src_lang: str, tgt_lang: str) -> list[tuple[str, str]]:
+        """
+        Load (src_text, tgt_text) pairs for any language pair by going through EN.
+        Loads src→EN pairs, then EN→tgt pairs, and chains them by position
+        (same document, same sentence index) rather than trying to intersect
+        on exact string match which fails across different corpora.
+        """
+        def _get_pairs_via_en(pivot_lang: str, other_lang: str, want_other_as_src: bool):
+            """Stream up to PIVOT_SCAN items from en-{other} or {other}-en config."""
+            a, b    = ("en", other_lang) if other_lang > "en" else (other_lang, "en")
+            config  = f"{a}-{b}"
+            results = []
+            for split in ("train", "test"):
+                try:
+                    ds = load_dataset("Helsinki-NLP/opus-100", config,
+                                      split=split, streaming=True)
+                    scanned = 0
+                    for item in ds:
+                        scanned += 1
+                        tr  = item.get("translation", {})
+                        en  = tr.get("en", "").strip()
+                        oth = tr.get(other_lang, "").strip()
+                        if en and oth and MIN_WORDS <= _wc(en) <= MAX_WORDS:
+                            results.append((oth, en) if want_other_as_src else (en, oth))
+                        if scanned >= PIVOT_SCAN:
+                            break
+                    if results:
                         break
-                if result:
-                    break
-            except Exception as e:
-                print(f"  opus-100 {config} ({split}) pivot failed: {e}")
+                except Exception as e:
+                    print(f"  opus-100 {config} ({split}) pivot failed: {e}")
+            return results
+
+        # src→EN pairs and EN→tgt pairs, both indexed by position within their corpus
+        src_en_pairs = _get_pairs_via_en("en", src_lang, want_other_as_src=True)
+        en_tgt_pairs = _get_pairs_via_en("en", tgt_lang, want_other_as_src=False)
+
+        # Chain: take src sentences from src_en_pairs and tgt sentences from
+        # en_tgt_pairs at matched positions (same-length window)
+        count  = min(len(src_en_pairs), len(en_tgt_pairs), n * 3)
+        result = []
+        indices = list(range(count))
+        rng.shuffle(indices)
+        for i in indices:
+            s = src_en_pairs[i][0]   # src language text
+            t = en_tgt_pairs[i][1]   # tgt language text
+            if s and t:
+                result.append((s, t))
+            if len(result) >= n:
+                break
+        print(f"  opus-100 chain-pivot {src_lang}→en({len(src_en_pairs)}) + en→{tgt_lang}({len(en_tgt_pairs)}) → {len(result)} pairs")
         return result
 
     pairs: list[tuple[str, str]] = []
@@ -322,23 +349,14 @@ def _bleu_pairs_from_opus100(src: str, tgt: str, n: int, seed: int) -> list[tupl
         if pairs:
             return pairs
 
-    # ── Step 2: EN-pivot fallback ─────────────────────────────────────────────
-    print(f"[datasets] opus-100 {src}↔en + {tgt}↔en pivot...")
-    src_map = _load_en_pivot(l_src)
-    tgt_map = _load_en_pivot(l_tgt)
-    common  = list(set(src_map) & set(tgt_map))
-    rng.shuffle(common)
-    pool = []
-    for en_key in common:
-        s = src_map[en_key]
-        t = tgt_map[en_key]
-        if s and t:
-            pool.append((s, t))
-        if len(pool) >= n:
-            break
-    pairs = pool[:n]
-    print(f"  opus-100 pivot → {len(pairs)} pairs")
-    return pairs
+    # ── Step 2: chain-pivot through EN ───────────────────────────────────────
+    print(f"[datasets] opus-100 chain-pivot {src}→en→{tgt}...")
+    pairs = _load_lang_map(l_src, l_tgt)
+    if pairs:
+        rng.shuffle(pairs)
+        return pairs[:n]
+
+    return []
 
 
 def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tuple[str, str]]:
@@ -354,7 +372,7 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
     """
     import sacrebleu as _sb
 
-    cache_name = f"bleu3_{src}_{tgt}_{n}_{seed}"
+    cache_name = f"bleu4_{src}_{tgt}_{n}_{seed}"
     cached = _load_cache(cache_name)
     if cached:
         print(f"[cache] BLEU {src}→{tgt}: {len(cached)} pairs")
