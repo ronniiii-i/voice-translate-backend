@@ -37,27 +37,92 @@ _PRONOUN_SUBJECT_ONLY = re.compile(
 
 _NAME_PATTERN = re.compile(r'\b[A-Z][a-z]{2,}\b')
 
+# Expanded exclusion list — common English words that are capitalised at
+# sentence start or in titles but are NOT proper names.
 _NOT_NAMES = {
-    "The", "A", "An", "This", "That", "These", "Those",
-    "I", "You", "We", "They", "He", "She", "It",
+    # Articles / determiners
+    "The", "A", "An", "This", "That", "These", "Those", "Some", "Any",
+    "All", "Both", "Each", "Every", "Neither", "Either",
+    # Pronouns
+    "I", "You", "We", "They", "He", "She", "It", "Who", "What",
+    "Which", "Whose", "Whom",
+    # Auxiliary / modal verbs
     "Have", "Has", "Had", "Can", "Could", "Would", "Should",
-    "Will", "Shall", "May", "Might", "Must", "Do", "Does",
-    "Please", "Thank", "Yes", "No", "Mr", "Mrs", "Ms", "Dr",
+    "Will", "Shall", "May", "Might", "Must", "Do", "Does", "Did",
+    "Be", "Is", "Are", "Was", "Were", "Been", "Being",
+    # Common sentence starters that get capitalised
+    "Please", "Thank", "Yes", "No", "Not", "But", "And", "Or", "So",
+    "Well", "Oh", "Okay", "Now", "Then", "Here", "There", "Just",
+    "Let", "Get", "Got", "Put", "See", "Say", "Said", "Tell", "Told",
+    "Come", "Go", "Make", "Take", "Give", "Know", "Think", "Look",
+    "Want", "Need", "Try", "Keep", "Use", "Find", "From", "With",
+    "About", "After", "Before", "Because", "When", "Where", "How",
+    "If", "As", "At", "By", "In", "On", "Of", "To", "For", "Up",
+    "Down", "Out", "Off", "Over", "Into", "Also", "Only", "Even",
+    "Still", "Already", "Never", "Always", "Maybe", "Really",
+    # Titles (abbreviated — the full name follows)
+    "Mr", "Mrs", "Ms", "Dr", "Sir", "Lord", "Lady", "Captain",
+    "General", "President", "Professor",
+    # Common words falsely capitalised mid-sentence in subtitles
+    "Don", "Are", "Did", "Does", "Has", "Was", "Were", "His", "Her",
+    "Its", "Our", "Your", "Their", "My", "We", "Us", "Him", "Them",
+    "Rule", "Note", "Dear", "Hello", "Hey", "Hi", "Bye", "Yeah",
+    "Okay", "Right", "Sure", "Sorry", "Wait", "Stop", "Help",
+    "Good", "Bad", "New", "Old", "Big", "Small", "Long", "Short",
+    "First", "Last", "Next", "Other", "Same", "Different",
+    "Very", "Too", "More", "Most", "Less", "Few", "Many", "Much",
+    # Legal / document words common in opus-100
+    "Article", "Section", "Chapter", "Part", "Annex", "Pursuant",
+    "Whereas", "Having", "According", "Provided", "Subject",
+    "Economic", "Social", "National", "International", "European",
+    "United", "Federal", "General", "Special", "Official",
+    # Misc corpus noise
+    "Laureate", "Necessity", "Health", "Team", "Example",
 }
+
+# A name is only a valid antecedent if it appears as a grammatical subject —
+# i.e. at sentence start (after optional punctuation/dash) or after a comma
+# followed by the name being the topic.
+_SUBJECT_NAME_PATTERN = re.compile(
+    r'(?:^|[.!?]\s+|[-–]\s*)([A-Z][a-z]{2,})(?:\s+(?:is|was|has|had|will|would|can|could|did|does|said|says|told|asked|went|came|got|took|made|looked|seemed|wanted|needed|tried|smiled|laughed|nodded|shook|turned|walked|ran|stood|sat|lay)\b)',
+)
 
 
 def _resolve_pronouns(text: str, context: list[str]) -> str:
+    """
+    Replace subject pronouns (he/she/they) in `text` with the most recent
+    named entity that appeared as a grammatical subject in `context`.
+
+    Only replaces when a high-confidence candidate is found — prefers named
+    entities that appear as sentence subjects (before a verb) to avoid
+    picking up capitalised words from titles, legal text, or sentence starts.
+    """
     if not _PRONOUN_SUBJECT_ONLY.search(text):
         return text
+
     candidate = None
+
+    # Pass 1: look for names appearing as grammatical subjects in context
     for utt in reversed(context):
-        names = _NAME_PATTERN.findall(utt)
-        names = [n for n in names if n not in _NOT_NAMES]
-        if names:
-            candidate = names[-1]
+        matches = _SUBJECT_NAME_PATTERN.findall(utt)
+        valid = [m for m in matches if m not in _NOT_NAMES and len(m) >= 3]
+        if valid:
+            candidate = valid[-1]
             break
+
+    # Pass 2: fallback — any capitalised word not in exclusion list,
+    # but only if it's ≥4 chars to reduce false positives
+    if not candidate:
+        for utt in reversed(context):
+            names = _NAME_PATTERN.findall(utt)
+            valid = [n for n in names if n not in _NOT_NAMES and len(n) >= 4]
+            if valid:
+                candidate = valid[-1]
+                break
+
     if not candidate:
         return text
+
     resolved = _PRONOUN_SUBJECT_ONLY.sub(candidate, text)
     if resolved != text:
         print(f"[MT] Pronoun resolved: '{text}' → '{resolved}' "
