@@ -424,6 +424,35 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
     return pairs
 
 
+def _is_dialogue(text: str) -> bool:
+    """
+    Heuristic filter: reject sentences that look like web/forum noise rather
+    than natural dialogue or prose. These pollute the context window with
+    timestamps, URLs, JSON blobs, and forum metadata.
+    """
+    import re as _re
+    # Reject if contains URLs
+    if _re.search(r'https?://', text):
+        return False
+    # Reject forum/timestamp patterns
+    if _re.search(r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}', text):
+        return False
+    if _re.search(r'\b\d{1,2}:\d{2}\s*(am|pm)?\b', text, _re.IGNORECASE):
+        return False
+    # Reject JSON/markup
+    if text.strip().startswith(('{', '[', '<', '/*')):
+        return False
+    # Reject if more than 30% digits
+    digits = sum(c.isdigit() for c in text)
+    if len(text) > 0 and digits / len(text) > 0.3:
+        return False
+    # Reject very short or very long
+    words = len(text.split())
+    if words < MIN_WORDS or words > MAX_WORDS:
+        return False
+    return True
+
+
 def get_context_sequences(
     src: str, tgt: str, n: int = 40, seed: int = 42,
 ) -> list[dict]:
@@ -431,13 +460,18 @@ def get_context_sequences(
     Returns discourse sequences for context-aware MT evaluation.
 
     Each item: {"context": [str, ...], "target": str, "reference": str}
-    where context = prior English turns, target = pronoun-containing English
-    sentence, reference = gold translation in the target language.
+    where context = prior English turns (k=3 window), target = pronoun-containing
+    English sentence, reference = gold translation in the target language.
 
-    Sequences are extracted from consecutive OpenSubtitles subtitle pairs
-    where the final subtitle in the window contains a pronoun (he/she/they/it).
+    Sequences are extracted from consecutive opus-100 subtitle pairs where the
+    final sentence in the sliding window contains a pronoun (he/she/they/it).
+    Non-dialogue noise (URLs, timestamps, forum metadata) is filtered out to
+    ensure the context window contains genuine conversational utterances.
+
+    For en-de, the de-en config is used with sides swapped and extra noise
+    filtering, since en-de is not available in opus-100.
     """
-    cache_name = f"context_{src}_{tgt}_{n}_{seed}"
+    cache_name = f"context2_{src}_{tgt}_{n}_{seed}"
     cached = _load_cache(cache_name)
     if cached:
         print(f"[cache] Context {src}→{tgt}: {len(cached)} sequences")
@@ -450,7 +484,6 @@ def get_context_sequences(
     rng = random.Random(seed)
     seqs: list[dict] = []
 
-    # Only try (l1=src, l2=tgt) — context eval always has src=en
     for a, b, swapped in [(l1, l2, False), (l2, l1, True)]:
         try:
             config = f"{a}-{b}"
@@ -463,15 +496,26 @@ def get_context_sequences(
             src_win: list[str] = []
             tgt_win: list[str] = []
             pool: list[dict]   = []
+            scanned = 0
+            MAX_SCAN = 200_000  # cap to avoid runaway streaming
 
             for item in ds:
+                scanned += 1
+                if scanned > MAX_SCAN:
+                    break
+
                 tr = item.get("translation", {})
                 s  = tr.get(a, "").strip()
                 t  = tr.get(b, "").strip()
 
                 if not s or not t:
-                    # Subtitle gap — reset window to avoid cross-scene context
                     src_win.clear()
+                    tgt_win.clear()
+                    continue
+
+                # Strict dialogue filter — reject noisy web/forum sentences
+                if not _is_dialogue(s) or not _is_dialogue(t):
+                    src_win.clear()  # break context continuity on noise
                     tgt_win.clear()
                     continue
 
@@ -481,33 +525,32 @@ def get_context_sequences(
                     src_win.pop(0)
                     tgt_win.pop(0)
 
-                if (len(src_win) >= 2
-                        and PRONOUN_RE.search(s)
-                        and MIN_WORDS <= _wc(s) <= MAX_WORDS):
-
+                # Need at least 2 prior sentences as context
+                if len(src_win) >= 2 and PRONOUN_RE.search(s):
                     context_s = src_win[:-1].copy()
                     target_s  = s
                     ref_s     = t
 
                     if swapped:
-                        # Ordering was reversed — src window is actually tgt language
                         context_s = tgt_win[:-1].copy()
                         target_s  = t
                         ref_s     = s
 
-                    pool.append({
-                        "context":   context_s,
-                        "target":    target_s,
-                        "reference": ref_s,
-                    })
+                    # Verify context sentences also look like dialogue
+                    if all(_is_dialogue(c) for c in context_s):
+                        pool.append({
+                            "context":   context_s,
+                            "target":    target_s,
+                            "reference": ref_s,
+                        })
 
-                if len(pool) >= n * 3:
+                if len(pool) >= n * 5:
                     break
 
             if pool:
                 rng.shuffle(pool)
                 seqs = pool[:n]
-                print(f"  → {len(seqs)} sequences")
+                print(f"  → {len(seqs)} sequences (from pool of {len(pool)})")
                 break
 
         except Exception as e:
