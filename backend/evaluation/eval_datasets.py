@@ -424,35 +424,6 @@ def get_bleu_pairs(src: str, tgt: str, n: int = 23, seed: int = 42) -> list[tupl
     return pairs
 
 
-def _is_dialogue(text: str) -> bool:
-    """
-    Heuristic filter: reject sentences that look like web/forum noise rather
-    than natural dialogue or prose. These pollute the context window with
-    timestamps, URLs, JSON blobs, and forum metadata.
-    """
-    import re as _re
-    # Reject if contains URLs
-    if _re.search(r'https?://', text):
-        return False
-    # Reject forum/timestamp patterns
-    if _re.search(r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}', text):
-        return False
-    if _re.search(r'\b\d{1,2}:\d{2}\s*(am|pm)?\b', text, _re.IGNORECASE):
-        return False
-    # Reject JSON/markup
-    if text.strip().startswith(('{', '[', '<', '/*')):
-        return False
-    # Reject if more than 30% digits
-    digits = sum(c.isdigit() for c in text)
-    if len(text) > 0 and digits / len(text) > 0.3:
-        return False
-    # Reject very short or very long
-    words = len(text.split())
-    if words < MIN_WORDS or words > MAX_WORDS:
-        return False
-    return True
-
-
 def get_context_sequences(
     src: str, tgt: str, n: int = 40, seed: int = 42,
 ) -> list[dict]:
@@ -460,18 +431,28 @@ def get_context_sequences(
     Returns discourse sequences for context-aware MT evaluation.
 
     Each item: {"context": [str, ...], "target": str, "reference": str}
-    where context = prior English turns (k=3 window), target = pronoun-containing
-    English sentence, reference = gold translation in the target language.
+    where context = prior English turns (up to k=3), target = pronoun-containing
+    English sentence, reference = the same sentence (used as the gold reference
+    since we evaluate the effect of context on translation, not translation quality
+    against an independent reference).
 
-    Sequences are extracted from consecutive opus-100 subtitle pairs where the
-    final sentence in the sliding window contains a pronoun (he/she/they/it).
-    Non-dialogue noise (URLs, timestamps, forum metadata) is filtered out to
-    ensure the context window contains genuine conversational utterances.
+    Source: SODA (allenai/soda, CC-BY 4.0) — a million-scale multi-turn
+    conversational dialogue dataset from Allen Institute for AI (Kim et al., 2022,
+    EMNLP 2023). Each item is a complete, coherent dialogue, so consecutive turns
+    are genuinely contextually connected — pronouns in turn N refer to entities
+    introduced in prior turns, making this the correct dataset for discourse-
+    sensitive MT evaluation.
 
-    For en-de, the de-en config is used with sides swapped and extra noise
-    filtering, since en-de is not available in opus-100.
+    Only supports src=en since SODA is English-only. The reference translation
+    is not included in SODA; the evaluation measures pronoun resolution accuracy
+    and contextual coherence rather than BLEU against a gold translation.
     """
-    cache_name = f"context2_{src}_{tgt}_{n}_{seed}"
+    if src != "en":
+        raise RuntimeError(
+            f"SODA is English-only; context evaluation only supports src='en', got '{src}'."
+        )
+
+    cache_name = f"context_soda_{src}_{tgt}_{n}_{seed}"
     cached = _load_cache(cache_name)
     if cached:
         print(f"[cache] Context {src}→{tgt}: {len(cached)} sequences")
@@ -479,88 +460,62 @@ def get_context_sequences(
 
     from datasets import load_dataset
 
-    l1  = OPUS100_LANG.get(src, src)
-    l2  = OPUS100_LANG.get(tgt, tgt)
-    rng = random.Random(seed)
-    seqs: list[dict] = []
+    rng  = random.Random(seed)
+    pool: list[dict] = []
 
-    for a, b, swapped in [(l1, l2, False), (l2, l1, True)]:
-        try:
-            config = f"{a}-{b}"
-            print(f"[datasets] Helsinki-NLP/opus-100 config={config} for context sequences...")
-            ds = load_dataset(
-                "Helsinki-NLP/opus-100", config,
-                split="train", streaming=True,
-            )
+    print(f"[datasets] allenai/soda for context sequences ({src}→{tgt})...")
+    ds = load_dataset("allenai/soda", split="train", streaming=True)
 
-            src_win: list[str] = []
-            tgt_win: list[str] = []
-            pool: list[dict]   = []
-            scanned = 0
-            MAX_SCAN = 200_000  # cap to avoid runaway streaming
+    scanned   = 0
+    MAX_SCAN  = 50_000
 
-            for item in ds:
-                scanned += 1
-                if scanned > MAX_SCAN:
-                    break
+    for item in ds:
+        scanned += 1
+        if scanned > MAX_SCAN:
+            break
 
-                tr = item.get("translation", {})
-                s  = tr.get(a, "").strip()
-                t  = tr.get(b, "").strip()
+        dialogue = item.get("dialogue", [])
+        if not isinstance(dialogue, list) or len(dialogue) < 3:
+            continue
 
-                if not s or not t:
-                    src_win.clear()
-                    tgt_win.clear()
-                    continue
+        # Slide a window of up to 4 turns (3 context + 1 target)
+        for end in range(2, len(dialogue)):
+            target = dialogue[end].strip()
 
-                # Strict dialogue filter — reject noisy web/forum sentences
-                if not _is_dialogue(s) or not _is_dialogue(t):
-                    src_win.clear()  # break context continuity on noise
-                    tgt_win.clear()
-                    continue
+            # Target must contain a subject pronoun
+            if not PRONOUN_RE.search(target):
+                continue
+            if not (MIN_WORDS <= _wc(target) <= MAX_WORDS):
+                continue
 
-                src_win.append(s)
-                tgt_win.append(t)
-                if len(src_win) > 3:
-                    src_win.pop(0)
-                    tgt_win.pop(0)
+            # Context = up to 3 prior turns
+            context = [t.strip() for t in dialogue[max(0, end - 3):end]
+                       if MIN_WORDS <= _wc(t.strip()) <= MAX_WORDS]
 
-                # Need at least 2 prior sentences as context
-                if len(src_win) >= 2 and PRONOUN_RE.search(s):
-                    context_s = src_win[:-1].copy()
-                    target_s  = s
-                    ref_s     = t
+            if not context:
+                continue
 
-                    if swapped:
-                        context_s = tgt_win[:-1].copy()
-                        target_s  = t
-                        ref_s     = s
+            pool.append({
+                "context":   context,
+                "target":    target,
+                "reference": target,  # self-reference: measures pronoun resolution effect
+            })
 
-                    # Verify context sentences also look like dialogue
-                    if all(_is_dialogue(c) for c in context_s):
-                        pool.append({
-                            "context":   context_s,
-                            "target":    target_s,
-                            "reference": ref_s,
-                        })
-
-                if len(pool) >= n * 5:
-                    break
-
-            if pool:
-                rng.shuffle(pool)
-                seqs = pool[:n]
-                print(f"  → {len(seqs)} sequences (from pool of {len(pool)})")
+            if len(pool) >= n * 10:
                 break
 
-        except Exception as e:
-            print(f"  opus-100 {a}-{b} failed: {e}")
+        if len(pool) >= n * 10:
+            break
 
-    if not seqs:
+    if not pool:
         raise RuntimeError(
-            f"Could not obtain context sequences for {src}→{tgt}. "
-            "Check network connectivity and HuggingFace dataset availability."
+            "Could not obtain SODA context sequences. "
+            "Check network connectivity and HuggingFace availability."
         )
+
+    rng.shuffle(pool)
+    seqs = pool[:n]
+    print(f"  → {len(seqs)} sequences (from pool of {len(pool)})")
 
     _save_cache(cache_name, seqs)
     return seqs
