@@ -32,7 +32,7 @@ from app.models.mt_model import HelsinkiTranslator
 from eval_datasets import get_bleu_pairs
 
 RESULTS_FILE     = os.path.join(os.path.dirname(__file__), "results_bleu.txt")
-SENTENCES_PER_ROUTE = 23   # ~300 total across 13 routes
+SENTENCES_PER_ROUTE = 100 
 
 DIRECT_ROUTES = [
     ("en", "fr"), ("fr", "en"),
