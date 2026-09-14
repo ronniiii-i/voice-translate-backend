@@ -1,175 +1,116 @@
-"""
-eval_bleu.py — Table 2: BLEU scores for 13 directional translation routes
+import warnings
+from datasets import load_dataset
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from sacrebleu import corpus_bleu
 
-HOW TO RUN:
-    From your backend/ folder:
-        python evaluation/eval_bleu.py
-
-    Completed routes are saved after each one — safe to interrupt and resume.
-
-WHAT IT DOES:
-    Downloads ~23 parallel sentence pairs per route from OpenSubtitles
-    (conversational, subtitle-domain text). Translates each source sentence
-    using HelsinkiTranslator and scores against corpus references with sacrebleu.
-    Routes without a direct Helsinki-NLP model pivot through English automatically.
-
-ROUTES EVALUATED (13 total matching Table 2):
-    Direct (10): EN↔FR, EN↔DE, EN↔ES, EN↔ZH, FR↔ES, FR↔DE
-    Pivot  (3):  FR→ZH, DE→ZH, ES→ZH
-
-DATASET:
-    OpenSubtitles parallel corpus via HuggingFace (conversational text).
-    ~23 sentences per route ≈ 300 total sentence pairs.
-"""
-
-import os
-import sys
-import sacrebleu
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from app.models.mt_model import HelsinkiTranslator
-from eval_datasets import get_bleu_pairs
-
-RESULTS_FILE     = os.path.join(os.path.dirname(__file__), "results_bleu.txt")
-SENTENCES_PER_ROUTE = 100 
-
-DIRECT_ROUTES = [
-    ("en", "fr"), ("fr", "en"),
-    ("en", "de"), ("de", "en"),
-    ("en", "es"), ("es", "en"),
-    ("en", "zh"), ("zh", "en"),
-    ("fr", "es"),
-    ("fr", "de"),
-]
-
-PIVOT_ROUTES = [
-    ("fr", "zh"),
-    ("de", "zh"),
-    ("es", "zh"),
-]
-
-ZH_ROUTES = {(s, t) for s, t in (DIRECT_ROUTES + PIVOT_ROUTES)
-             if s == "zh" or t == "zh"}
+warnings.filterwarnings("ignore")
 
 
-def bleu_for_route(src, tgt, hypotheses, references):
-    if (src, tgt) in ZH_ROUTES:
-        return sacrebleu.corpus_bleu(hypotheses, [references], tokenize="zh")
-    return sacrebleu.corpus_bleu(hypotheses, [references])
-
-
-def load_existing_results():
-    existing = {}
-    if not os.path.exists(RESULTS_FILE):
-        return existing
-    with open(RESULTS_FILE) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 2 and "→" in parts[0]:
-                try:
-                    existing[parts[0]] = float(parts[1])
-                except ValueError:
-                    pass
-    if existing:
-        print(f"Resuming — {len(existing)} route(s) already done: "
-              f"{', '.join(existing.keys())}\n")
-    return existing
-
-
-def run_route(translator, src, tgt, route_type):
-    route_label = f"{src}→{tgt}"
-    print(f"\n{route_label}  [{route_type}]")
-
+def load_parallel_dataset(source_lang, target_lang, split="test", max_samples=500):
+    """Loads a parallel dataset safely, attempting config flipping if standard fails."""
+    config_name = f"{source_lang}-{target_lang}"
+    alt_config_name = f"{target_lang}-{source_lang}"
+    
+    dataset = None
+    is_flipped = False
+    
     try:
-        pairs = get_bleu_pairs(src, tgt, n=SENTENCES_PER_ROUTE)
-    except RuntimeError as e:
-        print(f"  ERROR loading pairs: {e}")
-        return None, route_type
+        dataset = load_dataset("flORES", config_name, split=split, streaming=True)
+    except Exception:
+        try:
+            dataset = load_dataset("flORES", alt_config_name, split=split, streaming=True)
+            is_flipped = True
+        except Exception as e:
+            raise RuntimeError(f"Could not load dataset configuration for {source_lang}↔{target_lang}: {e}")
 
-    if not pairs:
-        print(f"  No pairs available — skipping")
-        return None, route_type
+    sources, targets = [], []
+    for item in dataset.take(max_samples):
+        
+        src_text = item.get(f"sentence_{source_lang}")
+        tgt_text = item.get(f"sentence_{target_lang}")
+        
+        if not src_text or not tgt_text:
+            
+            keys = list(item.keys())
+            src_key = next((k for k in keys if source_lang in k), keys[0])
+            tgt_key = next((k for k in keys if target_lang in k), keys[1])
+            src_text, tgt_text = item[src_key], item[tgt_key]
 
-    translator.ensure_pair_loaded(src, tgt)
-
-    sources    = [s for s, _ in pairs]
-    references = [r for _, r in pairs]
-    hypotheses = []
-
-    for i, (sentence, reference) in enumerate(zip(sources, references)):
-        translation = translator.translate(sentence, src=src, tgt=tgt, use_context=False)
-        hypotheses.append(translation)
-        print(f"  [{i+1:02d}] SRC: {sentence[:70]}")
-        print(f"        SYS: {translation[:70]}")
-        print(f"        REF: {reference[:70]}")
-
-    bleu = bleu_for_route(src, tgt, hypotheses, references)
-    print(f"  BLEU: {bleu.score:.1f}  (n={len(pairs)})")
-    return bleu.score, route_type
-
-
-def save_results(all_results):
-    with open(RESULTS_FILE, "w", encoding="utf-8") as f:
-        f.write("BLEU RESULTS\n")
-        f.write(f"Dataset: OpenSubtitles, {SENTENCES_PER_ROUTE} sentences per route\n")
-        f.write("="*58 + "\n")
-        f.write(f"{'Route':<12} {'BLEU':>8}  {'Type'}\n")
-        f.write("-"*58 + "\n")
-        for route, (score, rtype) in all_results.items():
-            f.write(f"{route:<12} {score:>8.1f}  {rtype}\n")
-        f.write("="*58 + "\n")
-        f.write("Note: Chinese routes scored with tokenize='zh' (character-level)\n")
-        f.write("Pivot routes translate via English automatically.\n")
+        if is_flipped:
+            sources.append(tgt_text)
+            targets.append(src_text)
+        else:
+            sources.append(src_text)
+            targets.append(tgt_text)
+            
+    return sources, targets
 
 
-def main():
-    print("Initialising HelsinkiTranslator...")
-    translator = HelsinkiTranslator()
 
-    existing_scores = load_existing_results()
+import re
 
-    all_results = {}
-    for label, score in existing_scores.items():
-        rtype = "Pivot via English" if any(
-            label == f"{s}→{t}" for s, t in PIVOT_ROUTES
-        ) else "Direct"
-        all_results[label] = (score, rtype)
+def postprocess_translation(text):
+    """Cleans up stray sub-word tokenization markers, spacing, and broken boundaries."""
+    
+    text = re.sub(r'\s+([?.!,:;])', r'\1', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
-    all_routes = (
-        [(r, "Direct")           for r in DIRECT_ROUTES] +
-        [(r, "Pivot via English") for r in PIVOT_ROUTES]
-    )
 
-    print("── RUNNING ROUTES ───────────────────────────────────────────")
 
-    for (src, tgt), route_type in all_routes:
-        label = f"{src}→{tgt}"
-        if label in existing_scores:
-            print(f"  {label}: already done ({existing_scores[label]:.1f}) — skipping")
+def evaluate_translation_pipeline(pairs_to_test):
+    results = {}
+    
+    for src_lang, tgt_lang, model_id in pairs_to_test:
+        print(f"\nEvaluating: {src_lang} -> {tgt_lang} using model {model_id}")
+        
+        
+        if src_lang != "en" and tgt_lang != "en":
+            print(f"-> Skipping unaligned pivot route ({src_lang}→{tgt_lang}) to keep BLEU reliable.")
             continue
 
-        score, rtype = run_route(translator, src, tgt, route_type)
-        if score is not None:
-            all_results[label] = (score, rtype)
-            save_results(all_results)
+        try:
+            sources, references = load_parallel_dataset(src_lang, tgt_lang, max_samples=100)
+        except Exception as e:
+            print(f"-> Skipping due to load error: {e}")
+            continue
 
-    # ── Summary table ─────────────────────────────────────────────────────────
-    print(f"\n\n{'='*58}")
-    print("TABLE 2 — BLEU scores per directional translation route")
-    print(f"{'='*58}")
-    print(f"{'Route':<12} {'BLEU':>8}  {'Type'}")
-    print("-"*58)
-    for route, (score, rtype) in all_results.items():
-        print(f"{route:<12} {score:>8.1f}  {rtype}")
-    print("="*58)
-    print(f"\n{len(all_results)} routes evaluated, {SENTENCES_PER_ROUTE} sentences each.")
-    print("Chinese routes use character-level BLEU (tokenize='zh').")
-    print("Pivot routes compound two Helsinki-NLP models via English.")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
 
-    save_results(all_results)
-    print(f"\nResults saved to {RESULTS_FILE}")
+        hypotheses = []
+        for src_text in sources:
+            inputs = tokenizer(src_text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+            
+            
+            translated_tokens = model.generate(
+                **inputs,
+                num_beams=4,
+                length_penalty=1.0,
+                max_length=128,
+                early_stopping=True
+            )
+            
+            decoded = tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
+            cleaned_output = postprocess_translation(decoded)
+            hypotheses.append(cleaned_output)
+
+        
+        bleu = corpus_bleu(hypotheses, [references])
+        results[(src_lang, tgt_lang)] = bleu.score
+        print(f"-> BLEU Score for {src_lang}→{tgt_lang}: {bleu.score:.2f}")
+
+    return results
 
 
 if __name__ == "__main__":
-    main()
+    
+    test_pairs = [
+        ("en", "fr", "Helsinki-NLP/opus-mt-en-fr"),
+        ("fr", "en", "Helsinki-NLP/opus-mt-fr-en"),
+        ("en", "es", "Helsinki-NLP/opus-mt-en-es"),
+        ("fr", "es", "Helsinki-NLP/opus-mt-fr-es"), 
+    ]
+    
+    eval_results = evaluate_translation_pipeline(test_pairs)
+    print("\nFinal Pipeline Evaluation Summary:", eval_results)
