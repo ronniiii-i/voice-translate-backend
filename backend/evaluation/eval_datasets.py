@@ -528,7 +528,7 @@ def get_scat_sequences(n=100):
     resolve pronoun ambiguity.
     """
     print("Loading SCAT dataset from Hugging Face (inseq/scat)...")
-    dataset = load_dataset("inseq/scat", split="test")
+    dataset = load_dataset("inseq/scat", split="test", trust_remote_code=True)
     
     sequences = []
     
