@@ -202,7 +202,7 @@ class HelsinkiTranslator:
         else:
             print(f"[MT] ⚠️ No route for {src}→{tgt}, returning original")
             return text
-        
+
         def _run_inference(input_str: str) -> str:
             if pair in MODEL_MAP:
                 return self._translate_direct(input_str, src, tgt)
@@ -210,34 +210,25 @@ class HelsinkiTranslator:
                 en_text = self._translate_direct(input_str, src, "en")
                 return self._translate_direct(en_text, "en", tgt)
             return input_str
-        
+
         standalone_translation = _run_inference(text).strip()
 
         if not use_context or not context:
             return standalone_translation
-        
+
         recent_context = context[-CONTEXT_WINDOW:]
         context_str = " ".join(recent_context).strip()
 
         if not context_str:
             return standalone_translation
 
-        combined_text = f"{context_str} {text}"
-        
-        translated_context = _run_inference(context_str).strip()
+        combined_text = f"{context_str}\n{text}"
+
         translated_combined = _run_inference(combined_text).strip()
 
-        if translated_combined.startswith(translated_context):
-            
-            final_output = translated_combined[len(translated_context):].strip()
+        if '\n' in translated_combined:
+            final_output = translated_combined.split('\n')[-1].strip()
             
             if final_output:
-                print(f"[MT] Context applied successfully!\n"
-                      f"     Target: '{text}'\n"
-                      f"     Result: '{final_output}'")
                 return final_output
-        
-        print(f"[MT] ⚠️ Context slice mismatch, falling back to standalone.\n"
-              f"     Target: '{text}' -> '{standalone_translation}'")
-        
         return standalone_translation
