@@ -28,6 +28,7 @@ import numpy as np
 import soundfile as sf
 from pathlib import Path
 from scipy import signal as scipy_signal
+from datasets import load_dataset
 
 # Tell the datasets library to use soundfile for audio decoding instead of
 # the default torchcodec (which requires a separate GPU-oriented install).
@@ -520,6 +521,29 @@ def get_context_sequences(
     _save_cache(cache_name, seqs)
     return seqs
 
+def get_scat_sequences(n=100):
+    """
+    Pulls ambiguous English-to-French translations from the SCAT dataset.
+    This dataset specifically tests if a model can use previous context to 
+    resolve pronoun ambiguity.
+    """
+    print("Loading SCAT dataset from Hugging Face (inseq/scat)...")
+    dataset = load_dataset("inseq/scat", split="test")
+    
+    sequences = []
+    
+    for row in dataset:
+        if row.get("has_supporting_preceding_context") == True:
+            sequences.append({
+                "context": [row["context_en"]],  
+                "target": row["en"],
+                "reference": row["fr"]
+            })
+            
+            if len(sequences) >= n:
+                break
+                
+    return sequences
 
 def get_latency_audio(n: int = 5, seed: int = 42) -> list[str]:
     """Returns English WAV paths for latency testing. Reuses ASR audio cache."""
