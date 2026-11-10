@@ -5,74 +5,129 @@ set -e
 
 echo "🏗️  Creating directory structure..."
 PROJECT_ROOT=$(pwd)
-mkdir -p ./models/asr ./models/tts ./models/mt
+mkdir -p ./models/tts
 
-# --- 1. WHISPER.CPP SETUP (ASR) ---
-echo "📥 Setting up Whisper.cpp (ASR)..."
-cd "$PROJECT_ROOT/models/asr"
-
-if [ ! -d "whisper.cpp" ]; then
-    git clone https://github.com/ggerganov/whisper.cpp.git
-fi
-
-cd whisper.cpp
-# Download the tiny model using their helper script
-bash ./models/download-ggml-model.sh tiny
-
-echo "🛠️  Building whisper.cpp..."
-cmake -B build
-cmake --build build -j --config Release
-
-# Verify build
-if [ -f "./build/bin/whisper-cli" ]; then
-    echo "✅ Whisper.cpp built successfully."
+# --- 1. PIPER TTS BINARY ---
+echo "📥 Installing Piper TTS binary..."
+if ! command -v piper &> /dev/null; then
+    PIPER_URL="https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz"
+    wget -q "$PIPER_URL" -O /tmp/piper.tar.gz
+    sudo tar -xzf /tmp/piper.tar.gz -C /usr/local/bin/ --strip-components=1
+    rm /tmp/piper.tar.gz
+    echo "✅ Piper installed."
 else
-    echo "❌ Whisper.cpp build failed."
-    exit 1
+    echo "✅ Piper already installed."
 fi
 
-# --- 2. PIPER VOICES (TTS) ---
-echo "📥 Downloading Piper Voice models (TTS)..."
+# --- 2. PIPER VOICE MODELS (TTS) ---
+echo "📥 Downloading Piper voice models (low quality)..."
 cd "$PROJECT_ROOT/models/tts"
 
-# French Voice (Siwis Medium)
-curl -L https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx -o fr_FR-siwis-medium.onnx
-curl -L https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json -o fr_FR-siwis-medium.onnx.json
+# English — ryan low
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/low/en_US-ryan-low.onnx" \
+    -O en_US-ryan-low.onnx
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/low/en_US-ryan-low.onnx.json" \
+    -O en_US-ryan-low.onnx.json
+echo "  ✅ English (ryan low)"
 
-# English Voice (Bryce Medium)
-curl -L https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx -o en_US-bryce-medium.onnx
-curl -L https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/bryce/medium/en_US-bryce-medium.onnx.json -o en_US-bryce-medium.onnx.json
+# French — siwis low
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/siwis/low/fr_FR-siwis-low.onnx" \
+    -O fr_FR-siwis-low.onnx
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/siwis/low/fr_FR-siwis-low.onnx.json" \
+    -O fr_FR-siwis-low.onnx.json
+echo "  ✅ French (siwis low)"
 
-# --- 3. ARGOS TRANSLATE (MT) ---
-echo "🤖 Installing Argos Language Packs (MT)..."
-# Ensure we are in the backend venv if it exists
-if [ -d "$PROJECT_ROOT/backend/venv" ]; then
-    source "$PROJECT_ROOT/backend/venv/bin/activate"
+# German — thorsten low
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/low/de_DE-thorsten-low.onnx" \
+    -O de_DE-thorsten-low.onnx
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/low/de_DE-thorsten-low.onnx.json" \
+    -O de_DE-thorsten-low.onnx.json
+echo "  ✅ German (thorsten low)"
+
+# Spanish — mls_10246 low
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/mls_10246/low/es_ES-mls_10246-low.onnx" \
+    -O es_ES-mls_10246-low.onnx
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/mls_10246/low/es_ES-mls_10246-low.onnx.json" \
+    -O es_ES-mls_10246-low.onnx.json
+echo "  ✅ Spanish (mls_10246 low)"
+
+# Chinese — huayan x_low (only available quality)
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/x_low/zh_CN-huayan-x_low.onnx" \
+    -O zh_CN-huayan-x_low.onnx
+wget -q "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/x_low/zh_CN-huayan-x_low.onnx.json" \
+    -O zh_CN-huayan-x_low.onnx.json
+echo "  ✅ Chinese (huayan x_low)"
+
+# --- 3. PYTHON ENVIRONMENT ---
+echo "🐍 Setting up Python environment..."
+cd "$PROJECT_ROOT/backend"
+
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+    echo "✅ Virtual environment created."
 fi
 
-pip install argostranslate
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+echo "✅ Python dependencies installed."
 
-python3 << EOF
+# --- 4. ARGOS TRANSLATE LANGUAGE PAIRS ---
+echo "🤖 Installing Argos Translate language pairs..."
+# Languages: English, French, German, Spanish, Chinese
+# Direct pairs are installed where available.
+# Pairs without a direct package (e.g. zh<->de) pivot through English at runtime.
+python3 - << 'PYEOF'
 import argostranslate.package
+
+PAIRS = [
+    ("en", "fr"), ("fr", "en"),
+    ("en", "de"), ("de", "en"),
+    ("en", "es"), ("es", "en"),
+    ("en", "zh"), ("zh", "en"),
+    ("fr", "de"), ("de", "fr"),
+    ("fr", "es"), ("es", "fr"),
+    ("de", "es"), ("es", "de"),
+]
+
 print("Updating Argos package index...")
 argostranslate.package.update_package_index()
 available = argostranslate.package.get_available_packages()
+available_map = {(p.from_code, p.to_code): p for p in available}
 
-pairs = [("en", "fr"), ("fr", "en")]
-for f, t in pairs:
-    print(f"Installing {f} -> {t}...")
-    pkg = next(filter(lambda x: x.from_code == f and x.to_code == t, available))
-    argostranslate.package.install_from_path(pkg.download())
-EOF
+for src, tgt in PAIRS:
+    pkg = available_map.get((src, tgt))
+    if pkg:
+        print(f"  Installing {src} -> {tgt}...")
+        argostranslate.package.install_from_path(pkg.download())
+        print(f"  ✅ {src} -> {tgt}")
+    else:
+        print(f"  ⚠️  No direct package for {src} -> {tgt} (will pivot via English at runtime)")
 
-# --- 4. SYSTEM DEPENDENCIES CHECK ---
+print("Argos language packs installed.")
+PYEOF
+
+# --- 5. SYSTEM DEPENDENCIES CHECK ---
 echo "🔍 Checking system dependencies..."
+
 if ! command -v ffmpeg &> /dev/null; then
-    echo "⚠️  WARNING: FFmpeg not found. Please install it: sudo apt install ffmpeg"
+    echo "⚠️  WARNING: FFmpeg not found. Install it with: sudo apt install ffmpeg"
 else
-    echo "✅ FFmpeg is installed."
+    echo "✅ FFmpeg found."
+fi
+
+if ! command -v wget &> /dev/null; then
+    echo "⚠️  WARNING: wget not found. Install it with: sudo apt install wget"
+else
+    echo "✅ wget found."
 fi
 
 echo "-----------------------------------------------"
-echo "✅ Setup Complete! All models prepared."
-echo "🚀 You can now start the backend and frontend."
+echo "✅ Setup complete! All models and language packs ready."
+echo ""
+echo "🚀 To start the backend:"
+echo "   cd backend && source venv/bin/activate"
+echo "   python3 -m app.main"
+echo ""
+echo "⚠️  NOTE: Whisper model (faster-whisper 'base') downloads automatically"
+echo "   on first startup (~150MB). Subsequent starts use the cached version."
